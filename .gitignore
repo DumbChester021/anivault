@@ -1,0 +1,4 @@
+# Dev artifacts
+.dev.pid
+.dev.log
+node_modules/

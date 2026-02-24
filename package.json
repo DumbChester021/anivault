@@ -1,0 +1,16 @@
+{
+    "name": "anivault",
+    "version": "1.0.0",
+    "description": "Anime discovery app powered by Jikan API",
+    "private": true,
+    "scripts": {
+        "dev": "sh dev.sh",
+        "stop": "if [ -f .dev.pid ]; then kill $(cat .dev.pid) 2>/dev/null; rm -f .dev.pid; echo 'Server stopped.'; else echo 'No server running.'; fi"
+    },
+    "keywords": [
+        "anime",
+        "jikan",
+        "search"
+    ],
+    "license": "MIT"
+}

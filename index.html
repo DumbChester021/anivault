@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AniVault — Anime Discovery</title>
+  <meta name="description" content="Discover, search, and explore anime with advanced filters. Powered by Jikan API.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- ─── Navigation ─────────────────────────────────────────────── -->
+  <nav class="nav" id="navbar">
+    <div class="nav__container">
+      <a href="#" class="nav__brand" data-nav="home">
+        <span class="nav__logo">▶</span>
+        <span class="nav__name">Ani<span class="accent">Vault</span></span>
+      </a>
+
+      <div class="nav__links" id="navLinks">
+        <a href="#" class="nav__link active" data-nav="home">Home</a>
+        <a href="#" class="nav__link" data-nav="search">Search</a>
+      </div>
+
+      <button class="nav__menu-btn" id="menuToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ─── Home Page ──────────────────────────────────────────────── -->
+  <main class="page page--active" id="page-home">
+    <div id="homeContent" class="page__content"></div>
+  </main>
+
+  <!-- ─── Search Page ────────────────────────────────────────────── -->
+  <main class="page" id="page-search">
+    <div class="search-layout">
+
+      <!-- Filter Toggle (mobile) -->
+      <button class="filter-toggle btn btn--outline" id="filterToggle">
+        <span class="filter-toggle__icon">⚙</span> Filters
+      </button>
+
+      <!-- Filter Panel -->
+      <aside class="filter-panel" id="filterPanel">
+        <div class="filter-panel__inner">
+          <h2 class="filter-panel__title">Advanced Search</h2>
+
+          <!-- Search Input -->
+          <div class="filter-group">
+            <label class="filter-label" for="searchInput">Search</label>
+            <input type="text" class="filter-input" id="searchInput" placeholder="Anime title…" autocomplete="off">
+          </div>
+
+          <!-- Quick Filters -->
+          <div class="filter-group">
+            <label class="filter-label">Quick Filters</label>
+            <div class="quick-filters">
+              <button class="btn btn--sm btn--accent" id="quickCompleted">Latest Completed</button>
+              <button class="btn btn--sm btn--outline" id="quickAiring">Top Airing</button>
+              <button class="btn btn--sm btn--outline" id="quickTopRated">Top Rated (8+)</button>
+            </div>
+          </div>
+
+          <hr class="filter-divider">
+
+          <!-- Type -->
+          <div class="filter-group">
+            <label class="filter-label" for="filterType">Type</label>
+            <select class="filter-select" id="filterType" data-param="type">
+              <option value="">All Types</option>
+              <option value="tv">TV</option>
+              <option value="movie">Movie</option>
+              <option value="ova">OVA</option>
+              <option value="special">Special</option>
+              <option value="ona">ONA</option>
+              <option value="music">Music</option>
+            </select>
+          </div>
+
+          <!-- Status -->
+          <div class="filter-group">
+            <label class="filter-label" for="filterStatus">Status</label>
+            <select class="filter-select" id="filterStatus" data-param="status">
+              <option value="">All Status</option>
+              <option value="airing">Airing</option>
+              <option value="complete">Completed</option>
+              <option value="upcoming">Upcoming</option>
+            </select>
+          </div>
+
+          <!-- Rating -->
+          <div class="filter-group">
+            <label class="filter-label" for="filterRating">Rating</label>
+            <select class="filter-select" id="filterRating" data-param="rating">
+              <option value="">All Ratings</option>
+              <option value="g">G — All Ages</option>
+              <option value="pg">PG — Children</option>
+              <option value="pg13">PG-13 — Teens</option>
+              <option value="r17">R — 17+</option>
+              <option value="r">R+ — Mild Nudity</option>
+            </select>
+          </div>
+
+          <!-- Score Range -->
+          <div class="filter-group">
+            <label class="filter-label">Min Score: <span id="minScoreVal">Any</span></label>
+            <input type="range" class="filter-range" id="filterMinScore" data-param="min_score" min="0" max="10" step="1" value="0">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Max Score: <span id="maxScoreVal">Any</span></label>
+            <input type="range" class="filter-range" id="filterMaxScore" data-param="max_score" min="0" max="10" step="1" value="10">
+          </div>
+
+          <!-- Order By -->
+          <div class="filter-group">
+            <label class="filter-label" for="filterOrderBy">Order By</label>
+            <select class="filter-select" id="filterOrderBy" data-param="order_by">
+              <option value="">Default</option>
+              <option value="score">Score</option>
+              <option value="title">Title</option>
+              <option value="start_date">Start Date</option>
+              <option value="end_date">End Date</option>
+              <option value="popularity">Popularity</option>
+              <option value="rank">Rank</option>
+              <option value="members">Members</option>
+              <option value="favorites">Favorites</option>
+            </select>
+          </div>
+
+          <!-- Sort Direction -->
+          <div class="filter-group">
+            <label class="filter-label" for="filterSort">Sort</label>
+            <select class="filter-select" id="filterSort" data-param="sort">
+              <option value="desc">Descending ↓</option>
+              <option value="asc">Ascending ↑</option>
+            </select>
+          </div>
+
+          <hr class="filter-divider">
+
+          <!-- Genres -->
+          <div class="filter-group">
+            <label class="filter-label">Genres</label>
+            <div class="genre-chips-container" id="genreChips">
+              <p class="loading-text">Loading genres…</p>
+            </div>
+          </div>
+
+          <hr class="filter-divider">
+
+          <button class="btn btn--outline btn--full" id="clearFilters">Clear All Filters</button>
+        </div>
+      </aside>
+
+      <!-- Results Area -->
+      <div class="search-results-area">
+        <div class="results-grid" id="searchResults">
+          <div class="empty-state">
+            <div class="empty-state__icon">🔍</div>
+            <p>Use the filters to search for anime, or try a quick filter!</p>
+          </div>
+        </div>
+        <div class="search-pagination" id="searchPagination"></div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- ─── Footer ─────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer__container">
+      <p>Powered by <a href="https://jikan.moe" target="_blank" rel="noopener">Jikan API</a> — Unofficial MyAnimeList API</p>
+      <p class="footer__sub">Built with ♥ — Not affiliated with MyAnimeList</p>
+    </div>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
