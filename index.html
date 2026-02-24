@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,9 +8,11 @@
   <meta name="description" content="Discover, search, and explore anime with advanced filters. Powered by Jikan API.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
+
 <body>
 
   <!-- ─── Navigation ─────────────────────────────────────────────── -->
@@ -23,6 +26,7 @@
       <div class="nav__links" id="navLinks">
         <a href="#" class="nav__link active" data-nav="home">Home</a>
         <a href="#" class="nav__link" data-nav="search">Search</a>
+        <a href="#" class="nav__link" data-nav="watch">Watch</a>
       </div>
 
       <button class="nav__menu-btn" id="menuToggle" aria-label="Toggle menu">
@@ -109,11 +113,13 @@
           <!-- Score Range -->
           <div class="filter-group">
             <label class="filter-label">Min Score: <span id="minScoreVal">Any</span></label>
-            <input type="range" class="filter-range" id="filterMinScore" data-param="min_score" min="0" max="10" step="1" value="0">
+            <input type="range" class="filter-range" id="filterMinScore" data-param="min_score" min="0" max="10"
+              step="1" value="0">
           </div>
           <div class="filter-group">
             <label class="filter-label">Max Score: <span id="maxScoreVal">Any</span></label>
-            <input type="range" class="filter-range" id="filterMaxScore" data-param="max_score" min="0" max="10" step="1" value="10">
+            <input type="range" class="filter-range" id="filterMaxScore" data-param="max_score" min="0" max="10"
+              step="1" value="10">
           </div>
 
           <!-- Order By -->
@@ -171,14 +177,68 @@
     </div>
   </main>
 
+  <!-- ─── Watch Page ─────────────────────────────────────────────── -->
+  <main class="page" id="page-watch">
+    <div class="watch-layout">
+
+      <!-- Episode Sidebar -->
+      <aside class="watch-sidebar" id="watchSidebar">
+        <div class="watch-sidebar__inner">
+          <h2 class="watch-sidebar__title">Episodes</h2>
+
+          <!-- Anime Search for Watch -->
+          <div class="filter-group">
+            <label class="filter-label" for="watchSearchInput">Find Anime</label>
+            <input type="text" class="filter-input" id="watchSearchInput" placeholder="Search anime title…"
+              autocomplete="off">
+          </div>
+
+          <!-- Search Results (shows matching anime to pick from) -->
+          <div class="watch-search-results" id="watchSearchResults"></div>
+
+          <!-- Episode List (shown after anime is selected) -->
+          <div class="watch-anime-info" id="watchAnimeInfo" style="display:none">
+            <div class="watch-anime-header" id="watchAnimeHeader"></div>
+            <div class="episode-list" id="episodeList"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Player Area -->
+      <div class="watch-player-area">
+        <!-- Language Toggle -->
+        <div class="watch-controls" id="watchControls" style="display:none">
+          <div class="lang-toggle" id="langToggle">
+            <button class="lang-toggle__btn lang-toggle__btn--active" data-lang="sub">SUB</button>
+            <button class="lang-toggle__btn" data-lang="dub">DUB</button>
+          </div>
+          <button class="btn btn--outline btn--sm" id="watchEpToggle">
+            <span class="filter-toggle__icon">☰</span> Episodes
+          </button>
+        </div>
+
+        <!-- Player Container -->
+        <div class="player-container" id="playerContainer">
+          <div class="player-placeholder" id="playerPlaceholder">
+            <div class="player-placeholder__icon">▶</div>
+            <p>Search for an anime and select an episode to start watching</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
   <!-- ─── Footer ─────────────────────────────────────────────────── -->
   <footer class="footer">
     <div class="footer__container">
-      <p>Powered by <a href="https://jikan.moe" target="_blank" rel="noopener">Jikan API</a> — Unofficial MyAnimeList API</p>
+      <p>Powered by <a href="https://jikan.moe" target="_blank" rel="noopener">Jikan API</a> — Unofficial MyAnimeList
+        API</p>
       <p class="footer__sub">Built with ♥ — Not affiliated with MyAnimeList</p>
     </div>
   </footer>
 
   <script type="module" src="js/app.js"></script>
 </body>
+
 </html>

@@ -4,6 +4,7 @@
 
 import { $, $$, debounce } from './utils.js';
 import * as api from './api.js';
+import * as streaming from './streaming.js';
 import {
     createCarousel, createCarouselSkeleton, createHeroBanner,
     createAnimeCard, showSkeletons, createResultsGrid,
@@ -11,6 +12,8 @@ import {
     openDetailModal, closeDetailModal,
     renderGenreChips, createErrorCard, createEmptyState,
     createSkeletonCard,
+    createWatchSearchItem, createWatchAnimeHeader, createEpisodeItem,
+    createPlayerEmbed,
 } from './components.js';
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -32,12 +35,21 @@ const state = {
         loading: false,
     },
     genresList: [],
+    watch: {
+        searchQuery: '',
+        selectedAnime: null, // { id, name, poster, ... } from hianime
+        episodes: [],
+        currentEpId: null,
+        language: 'sub',
+        loading: false,
+    },
 };
 
 // ─── Init ────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     setupNav();
     setupCustomDetailEvent();
+    setupWatchEvents();
     navigateTo('home');
 });
 
@@ -81,6 +93,7 @@ function navigateTo(page) {
     // Load page content
     if (page === 'home') loadHomePage();
     if (page === 'search') loadSearchPage();
+    if (page === 'watch') loadWatchPage();
 
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -453,6 +466,234 @@ function setupCustomDetailEvent() {
     document.addEventListener('openAnimeDetail', (e) => {
         if (e.detail?.id) showAnimeDetail(e.detail.id);
     });
+}
+
+// ─── Watch Page ──────────────────────────────────────────────────────
+let watchInitialized = false;
+
+function setupWatchEvents() {
+    // Navigate to watch from detail modal
+    document.addEventListener('navigateToWatch', (e) => {
+        const title = e.detail?.title;
+        closeDetailModal();
+        state.watch.searchQuery = title || '';
+        state.watch.selectedAnime = null;
+        state.watch.episodes = [];
+        state.watch.currentEpId = null;
+        watchInitialized = false; // Force re-init with new search
+        navigateTo('watch');
+    });
+
+    // Reset watch (change anime)
+    document.addEventListener('watchReset', () => {
+        state.watch.selectedAnime = null;
+        state.watch.episodes = [];
+        state.watch.currentEpId = null;
+        renderWatchSidebar();
+        renderPlayer();
+    });
+}
+
+async function loadWatchPage() {
+    if (!watchInitialized) {
+        initWatchControls();
+        watchInitialized = true;
+    }
+
+    // If we have a pre-filled search query (from detail modal), search immediately
+    const searchInput = $('#watchSearchInput');
+    if (state.watch.searchQuery && searchInput) {
+        searchInput.value = state.watch.searchQuery;
+        await performWatchSearch(state.watch.searchQuery);
+        state.watch.searchQuery = ''; // Clear after use
+    }
+}
+
+function initWatchControls() {
+    // Search input
+    const searchInput = $('#watchSearchInput');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce((e) => {
+            const query = e.target.value.trim();
+            if (query.length >= 2) {
+                performWatchSearch(query);
+            } else {
+                const results = $('#watchSearchResults');
+                if (results) results.innerHTML = '';
+            }
+        }, 500));
+    }
+
+    // Language toggle
+    const langToggle = $('#langToggle');
+    if (langToggle) {
+        langToggle.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-lang]');
+            if (!btn) return;
+            const lang = btn.dataset.lang;
+            if (lang === state.watch.language) return;
+
+            state.watch.language = lang;
+
+            // Update active button
+            langToggle.querySelectorAll('.lang-toggle__btn').forEach(b => {
+                b.classList.toggle('lang-toggle__btn--active', b.dataset.lang === lang);
+            });
+
+            // Reload player with new language
+            if (state.watch.currentEpId) {
+                renderPlayer();
+            }
+        });
+    }
+
+    // Mobile episode toggle
+    const epToggle = $('#watchEpToggle');
+    const sidebar = $('#watchSidebar');
+    if (epToggle && sidebar) {
+        epToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('watch-sidebar--open');
+        });
+    }
+}
+
+async function performWatchSearch(query) {
+    const resultsContainer = $('#watchSearchResults');
+    const animeInfo = $('#watchAnimeInfo');
+    if (!resultsContainer) return;
+
+    // Show search results, hide episode list
+    if (animeInfo) animeInfo.style.display = 'none';
+    resultsContainer.innerHTML = '<p class="loading-text">Searching...</p>';
+
+    try {
+        const data = await streaming.searchHianime(query);
+        resultsContainer.innerHTML = '';
+
+        if (!data.animes || data.animes.length === 0) {
+            resultsContainer.appendChild(createEmptyState('No anime found on hianime'));
+            return;
+        }
+
+        for (const anime of data.animes) {
+            resultsContainer.appendChild(createWatchSearchItem(anime, selectWatchAnime));
+        }
+    } catch (err) {
+        console.error('[Watch Search]', err);
+        resultsContainer.innerHTML = '';
+        resultsContainer.appendChild(createErrorCard(
+            `Search failed: ${err.message}`,
+            () => performWatchSearch(query),
+        ));
+    }
+}
+
+async function selectWatchAnime(anime) {
+    state.watch.selectedAnime = anime;
+    state.watch.episodes = [];
+    state.watch.currentEpId = null;
+
+    // Hide search results, show anime info
+    const resultsContainer = $('#watchSearchResults');
+    if (resultsContainer) resultsContainer.innerHTML = '';
+
+    renderWatchSidebar();
+    await loadEpisodes(anime.id);
+}
+
+async function loadEpisodes(animeId) {
+    const episodeList = $('#episodeList');
+    if (!episodeList) return;
+
+    episodeList.innerHTML = '<p class="loading-text">Loading episodes...</p>';
+
+    try {
+        const data = await streaming.getEpisodes(animeId);
+        state.watch.episodes = data.episodes || [];
+
+        renderEpisodeList();
+    } catch (err) {
+        console.error('[Watch Episodes]', err);
+        episodeList.innerHTML = '';
+        episodeList.appendChild(createErrorCard(
+            `Failed to load episodes: ${err.message}`,
+            () => loadEpisodes(animeId),
+        ));
+    }
+}
+
+function renderWatchSidebar() {
+    const animeInfo = $('#watchAnimeInfo');
+    const headerContainer = $('#watchAnimeHeader');
+    const controls = $('#watchControls');
+
+    if (!animeInfo || !headerContainer) return;
+
+    if (state.watch.selectedAnime) {
+        animeInfo.style.display = 'block';
+        headerContainer.innerHTML = '';
+        headerContainer.appendChild(createWatchAnimeHeader(state.watch.selectedAnime));
+        if (controls) controls.style.display = 'flex';
+    } else {
+        animeInfo.style.display = 'none';
+        headerContainer.innerHTML = '';
+        if (controls) controls.style.display = 'none';
+    }
+}
+
+function renderEpisodeList() {
+    const episodeList = $('#episodeList');
+    if (!episodeList) return;
+
+    episodeList.innerHTML = '';
+
+    if (state.watch.episodes.length === 0) {
+        episodeList.appendChild(createEmptyState('No episodes found'));
+        return;
+    }
+
+    for (const ep of state.watch.episodes) {
+        const isActive = ep.episodeId === state.watch.currentEpId;
+        episodeList.appendChild(createEpisodeItem(ep, isActive, selectEpisode));
+    }
+}
+
+function selectEpisode(ep) {
+    const epId = streaming.extractEpId(ep.episodeId);
+    if (!epId) {
+        console.error('[Watch] Could not extract ep ID from:', ep.episodeId);
+        return;
+    }
+
+    state.watch.currentEpId = ep.episodeId;
+    renderEpisodeList(); // Update active state
+    renderPlayer();
+
+    // Close mobile sidebar after selection
+    const sidebar = $('#watchSidebar');
+    if (sidebar) sidebar.classList.remove('watch-sidebar--open');
+}
+
+function renderPlayer() {
+    const container = $('#playerContainer');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!state.watch.currentEpId) {
+        container.innerHTML = `
+            <div class="player-placeholder" id="playerPlaceholder">
+                <div class="player-placeholder__icon">▶</div>
+                <p>Search for an anime and select an episode to start watching</p>
+            </div>
+        `;
+        return;
+    }
+
+    const epId = streaming.extractEpId(state.watch.currentEpId);
+    if (!epId) return;
+
+    container.appendChild(createPlayerEmbed(epId, state.watch.language));
 }
 
 // Expose for debugging

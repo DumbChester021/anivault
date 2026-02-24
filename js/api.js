@@ -11,7 +11,9 @@
  *  - Detailed console logging
  */
 
-const BASE_URL = 'https://api.jikan.moe/v4';
+import { JIKAN_API_BASE } from './config.js';
+
+const BASE_URL = JIKAN_API_BASE;
 
 // ─── Error Classes ───────────────────────────────────────────────────
 export class JikanError extends Error {

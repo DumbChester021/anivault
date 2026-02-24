@@ -275,6 +275,7 @@ export function openDetailModal(anime, recommendations = []) {
                     titleJp ? el('p', { className: 'modal__title-jp' }, titleJp) : null,
                     statsRow,
                     genreTags,
+                    createWatchButton(title),
                 ),
             ),
             el('div', { className: 'modal__body' },
@@ -425,3 +426,94 @@ export function createEmptyState(message = 'No results found') {
         el('p', {}, message),
     );
 }
+
+// ─── Watch Page Components ───────────────────────────────────────────
+
+/**
+ * Create a search result item for the watch page (hianime result).
+ */
+export function createWatchSearchItem(anime, onClick) {
+    const item = el('div', { className: 'watch-search-item' },
+        el('img', {
+            className: 'watch-search-item__poster',
+            src: anime.poster || '',
+            alt: anime.name || '',
+            loading: 'lazy',
+        }),
+        el('div', { className: 'watch-search-item__info' },
+            el('h4', { className: 'watch-search-item__name' }, anime.name || ''),
+            el('div', { className: 'watch-search-item__meta' },
+                anime.type ? el('span', { className: 'tag' }, anime.type) : null,
+                anime.episodes?.sub ? el('span', {}, `${anime.episodes.sub} eps`) : null,
+                anime.episodes?.dub ? el('span', { className: 'text-accent' }, `${anime.episodes.dub} dub`) : null,
+            ),
+        ),
+    );
+    item.addEventListener('click', () => onClick?.(anime));
+    return item;
+}
+
+/**
+ * Create the anime header for the watch sidebar.
+ */
+export function createWatchAnimeHeader(anime) {
+    return el('div', { className: 'watch-anime-card' },
+        anime.poster
+            ? el('img', {
+                className: 'watch-anime-card__poster',
+                src: anime.poster,
+                alt: anime.name || '',
+                loading: 'lazy',
+            })
+            : null,
+        el('div', { className: 'watch-anime-card__info' },
+            el('h3', { className: 'watch-anime-card__name' }, anime.name || ''),
+            el('button', {
+                className: 'btn btn--outline btn--sm watch-anime-card__back',
+                onClick: () => document.dispatchEvent(new CustomEvent('watchReset')),
+            }, '← Change Anime'),
+        ),
+    );
+}
+
+/**
+ * Create an episode list item.
+ */
+export function createEpisodeItem(ep, isActive, onClick) {
+    const classes = `episode-item${isActive ? ' episode-item--active' : ''}${ep.isFiller ? ' episode-item--filler' : ''}`;
+    const item = el('div', { className: classes, dataset: { epId: ep.episodeId } },
+        el('span', { className: 'episode-item__number' }, `${ep.number}`),
+        el('span', { className: 'episode-item__title' }, ep.title || `Episode ${ep.number}`),
+        ep.isFiller ? el('span', { className: 'episode-item__filler-tag' }, 'Filler') : null,
+    );
+    item.addEventListener('click', () => onClick?.(ep));
+    return item;
+}
+
+/**
+ * Create the embedded player iframe.
+ */
+export function createPlayerEmbed(epId, language = 'sub') {
+    const src = `https://megaplay.buzz/stream/s-2/${epId}/${language}`;
+    return el('iframe', {
+        className: 'player-iframe',
+        src,
+        frameborder: '0',
+        allowfullscreen: '',
+        allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',
+        referrerpolicy: 'origin',
+    });
+}
+
+/**
+ * Create a "Watch" button for the detail modal.
+ */
+export function createWatchButton(animeTitle) {
+    return el('button', {
+        className: 'btn btn--primary watch-btn',
+        onClick: () => {
+            document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title: animeTitle } }));
+        },
+    }, '▶ Watch');
+}
+

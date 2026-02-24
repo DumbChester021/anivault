@@ -2,3 +2,7 @@
 .dev.pid
 .dev.log
 node_modules/
+.env
+
+# Hianime API (separate repo)
+hianime-api/
