@@ -500,11 +500,11 @@ async function loadWatchPage() {
         watchInitialized = true;
     }
 
-    // If we have a pre-filled search query (from detail modal), search immediately
+    // If we have a pre-filled search query (from detail modal), search and auto-select
     const searchInput = $('#watchSearchInput');
     if (state.watch.searchQuery && searchInput) {
         searchInput.value = state.watch.searchQuery;
-        await performWatchSearch(state.watch.searchQuery);
+        await performWatchSearch(state.watch.searchQuery, true);
         state.watch.searchQuery = ''; // Clear after use
     }
 }
@@ -557,7 +557,7 @@ function initWatchControls() {
     }
 }
 
-async function performWatchSearch(query) {
+async function performWatchSearch(query, autoSelect = false) {
     const resultsContainer = $('#watchSearchResults');
     const animeInfo = $('#watchAnimeInfo');
     if (!resultsContainer) return;
@@ -575,6 +575,16 @@ async function performWatchSearch(query) {
             return;
         }
 
+        // Auto-select: find best match and skip the search results UI
+        if (autoSelect) {
+            const bestMatch = findBestMatch(query, data.animes);
+            if (bestMatch) {
+                console.log(`[Watch] Auto-selected: "${bestMatch.name}"`);
+                await selectWatchAnime(bestMatch);
+                return;
+            }
+        }
+
         for (const anime of data.animes) {
             resultsContainer.appendChild(createWatchSearchItem(anime, selectWatchAnime));
         }
@@ -583,9 +593,38 @@ async function performWatchSearch(query) {
         resultsContainer.innerHTML = '';
         resultsContainer.appendChild(createErrorCard(
             `Search failed: ${err.message}`,
-            () => performWatchSearch(query),
+            () => performWatchSearch(query, autoSelect),
         ));
     }
+}
+
+/**
+ * Find the best matching anime from hianime results given a Jikan title.
+ * Uses normalized string matching.
+ */
+function findBestMatch(query, animes) {
+    const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const q = normalize(query);
+
+    // Try exact normalized match first
+    for (const anime of animes) {
+        const name = normalize(anime.name || '');
+        const jname = normalize(anime.jname || '');
+        if (name === q || jname === q) return anime;
+    }
+
+    // Try inclusion match (query contains anime name or vice versa)
+    for (const anime of animes) {
+        const name = normalize(anime.name || '');
+        if (name && (q.includes(name) || name.includes(q))) return anime;
+    }
+
+    // Fall back to first result if it's a TV series (most likely correct)
+    const tvMatch = animes.find(a => a.type === 'TV');
+    if (tvMatch) return tvMatch;
+
+    // Last resort: first result
+    return animes[0];
 }
 
 async function selectWatchAnime(anime) {
@@ -612,6 +651,11 @@ async function loadEpisodes(animeId) {
         state.watch.episodes = data.episodes || [];
 
         renderEpisodeList();
+
+        // Auto-play first episode if none selected yet
+        if (!state.watch.currentEpId && state.watch.episodes.length > 0) {
+            selectEpisode(state.watch.episodes[0]);
+        }
     } catch (err) {
         console.error('[Watch Episodes]', err);
         episodeList.innerHTML = '';
