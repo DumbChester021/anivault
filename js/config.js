@@ -9,7 +9,7 @@
 export const JIKAN_API_BASE = 'https://api.jikan.moe/v4';
 
 // Hianime API (aniwatch-api) — self-hosted instance
-export const HIANIME_API_BASE = 'https://anivault-hianime-r8tr4sdp3-breaksoft-projects.vercel.app';
+export const HIANIME_API_BASE = 'https://anivault-hianime-api.vercel.app';
 
 // MegaPlay embed player
 export const MEGAPLAY_BASE = 'https://megaplay.buzz/stream/s-2';
