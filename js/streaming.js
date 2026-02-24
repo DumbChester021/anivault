@@ -27,7 +27,7 @@ export async function searchHianime(query, page = 1) {
     }
 
     const json = await resp.json();
-    if (!json.success) {
+    if (json.status !== 200) {
         throw new Error('Hianime search returned unsuccessful response');
     }
     return json.data;
@@ -48,7 +48,7 @@ export async function getAnimeInfo(animeId) {
     }
 
     const json = await resp.json();
-    if (!json.success) {
+    if (json.status !== 200) {
         throw new Error('Hianime anime info returned unsuccessful response');
     }
     return json.data;
@@ -69,7 +69,7 @@ export async function getEpisodes(animeId) {
     }
 
     const json = await resp.json();
-    if (!json.success) {
+    if (json.status !== 200) {
         throw new Error('Hianime episodes returned unsuccessful response');
     }
     return json.data;
