@@ -710,6 +710,9 @@ img {
 
 .filter-panel__hide {
     display: none;
+    touch-action: manipulation;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
 }
 
 @media (max-width: 1024px) {
@@ -736,7 +739,7 @@ img {
     }
 
     .filter-panel {
-        display: none;
+        display: none !important;
         position: fixed;
         inset: 0;
         top: var(--nav-height);
@@ -746,10 +749,11 @@ img {
         -webkit-backdrop-filter: blur(20px);
         overflow-y: auto;
         padding: 24px;
+        animation: none;
     }
 
     .filter-panel--open {
-        display: block;
+        display: block !important;
         animation: slideIn 0.3s var(--ease);
     }
 

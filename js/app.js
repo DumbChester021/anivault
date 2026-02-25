@@ -312,21 +312,40 @@ function setupFilterPanel() {
     const filterToggle = $('#filterToggle');
     const filterPanel = $('#filterPanel');
 
+    function openPanel() {
+        if (!filterPanel) return;
+        filterPanel.classList.add('filter-panel--open');
+        filterPanel.style.display = 'block';
+        if (filterToggle) filterToggle.classList.add('active');
+    }
+
+    function closePanel() {
+        if (!filterPanel) return;
+        filterPanel.classList.remove('filter-panel--open');
+        filterPanel.style.display = '';
+        if (filterToggle) filterToggle.classList.remove('active');
+    }
+
     if (filterToggle && filterPanel) {
         filterToggle.addEventListener('click', () => {
-            filterPanel.classList.toggle('filter-panel--open');
-            filterToggle.classList.toggle('active');
+            if (filterPanel.classList.contains('filter-panel--open')) {
+                closePanel();
+            } else {
+                openPanel();
+            }
         });
     }
 
     // Hide filters buttons (top + bottom inside panel)
     document.querySelectorAll('.filter-panel__hide').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        // Use both click and touchend for maximum mobile compatibility
+        const handler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (filterPanel) filterPanel.classList.remove('filter-panel--open');
-            if (filterToggle) filterToggle.classList.remove('active');
-        });
+            closePanel();
+        };
+        btn.addEventListener('click', handler);
+        btn.addEventListener('touchend', handler);
     });
 }
 
