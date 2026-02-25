@@ -363,6 +363,14 @@ async function performSearch(append = false) {
     if (!append) {
         showSkeletons(resultsContainer, 12);
         if (paginationContainer) paginationContainer.innerHTML = '';
+
+        // Auto-close filter panel on mobile when searching
+        const filterPanel = $('#filterPanel');
+        const filterToggle = $('#filterToggle');
+        if (filterPanel && filterPanel.classList.contains('filter-panel--open')) {
+            filterPanel.classList.remove('filter-panel--open');
+            if (filterToggle) filterToggle.classList.remove('active');
+        }
     }
 
     const params = {};
@@ -632,11 +640,18 @@ async function selectWatchAnime(anime) {
     state.watch.episodes = [];
     state.watch.currentEpId = null;
 
+    // Smart language: default to sub, only allow dub if available
+    const hasDub = anime.episodes?.dub && anime.episodes.dub > 0;
+    if (!hasDub && state.watch.language === 'dub') {
+        state.watch.language = 'sub';
+    }
+
     // Hide search results, show anime info
     const resultsContainer = $('#watchSearchResults');
     if (resultsContainer) resultsContainer.innerHTML = '';
 
     renderWatchSidebar();
+    updateLangToggle();
     await loadEpisodes(anime.id);
 }
 
@@ -683,6 +698,28 @@ function renderWatchSidebar() {
         headerContainer.innerHTML = '';
         if (controls) controls.style.display = 'none';
     }
+}
+
+/**
+ * Update the language toggle based on dub availability.
+ */
+function updateLangToggle() {
+    const langToggle = $('#langToggle');
+    if (!langToggle) return;
+
+    const anime = state.watch.selectedAnime;
+    const hasDub = anime?.episodes?.dub && anime.episodes.dub > 0;
+
+    langToggle.querySelectorAll('.lang-toggle__btn').forEach(btn => {
+        const lang = btn.dataset.lang;
+        btn.classList.toggle('lang-toggle__btn--active', lang === state.watch.language);
+
+        if (lang === 'dub') {
+            btn.disabled = !hasDub;
+            btn.classList.toggle('lang-toggle__btn--disabled', !hasDub);
+            btn.title = hasDub ? '' : 'Dub not available';
+        }
+    });
 }
 
 function renderEpisodeList() {

@@ -275,7 +275,7 @@ export function openDetailModal(anime, recommendations = []) {
                     titleJp ? el('p', { className: 'modal__title-jp' }, titleJp) : null,
                     statsRow,
                     genreTags,
-                    createWatchButton(title),
+                    createWatchButton(anime),
                 ),
             ),
             el('div', { className: 'modal__body' },
@@ -507,12 +507,22 @@ export function createPlayerEmbed(epId, language = 'sub') {
 
 /**
  * Create a "Watch" button for the detail modal.
+ * Only shows for types likely available on hianime.
  */
-export function createWatchButton(animeTitle) {
+export function createWatchButton(anime) {
+    // Types unlikely to be on hianime
+    const type = (anime.type || '').toLowerCase();
+    const excludedTypes = ['music'];
+    if (excludedTypes.includes(type)) return null;
+
+    // Skip if it has no episodes
+    if (anime.episodes === 0) return null;
+
+    const title = anime.title_english || anime.title || '';
     return el('button', {
         className: 'btn btn--primary watch-btn',
         onClick: () => {
-            document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title: animeTitle } }));
+            document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title } }));
         },
     }, '▶ Watch');
 }

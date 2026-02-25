@@ -1455,6 +1455,12 @@ img {
     box-shadow: 0 2px 8px var(--accent-glow);
 }
 
+.lang-toggle__btn--disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 /* ─── Player Container ────────────────────────────────────────────── */
 .player-container {
     position: relative;
