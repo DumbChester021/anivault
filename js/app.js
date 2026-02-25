@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupNav();
     setupCustomDetailEvent();
     setupWatchEvents();
+    setupFilterPanel();
     navigateTo('home');
 });
 
@@ -304,15 +305,12 @@ async function initSearchFilters() {
             });
         });
     }
+}
 
-    // Mobile filter toggle
+// ─── Filter Panel (mobile hide/show) ─────────────────────────────────
+function setupFilterPanel() {
     const filterToggle = $('#filterToggle');
     const filterPanel = $('#filterPanel');
-
-    function closeFilterPanel() {
-        if (filterPanel) filterPanel.classList.remove('filter-panel--open');
-        if (filterToggle) filterToggle.classList.remove('active');
-    }
 
     if (filterToggle && filterPanel) {
         filterToggle.addEventListener('click', () => {
@@ -322,12 +320,12 @@ async function initSearchFilters() {
     }
 
     // Hide filters buttons (top + bottom inside panel)
-    const hideButtons = document.querySelectorAll('.filter-panel__hide');
-    hideButtons.forEach(btn => {
+    document.querySelectorAll('.filter-panel__hide').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            closeFilterPanel();
+            if (filterPanel) filterPanel.classList.remove('filter-panel--open');
+            if (filterToggle) filterToggle.classList.remove('active');
         });
     });
 }
