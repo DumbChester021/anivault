@@ -883,6 +883,9 @@ function renderPlayer() {
                 <p>Search for an anime and select an episode to start watching</p>
             </div>
         `;
+        // Remove any existing ep nav
+        const existingNav = document.querySelector('.episode-nav');
+        if (existingNav) existingNav.remove();
         return;
     }
 
@@ -890,6 +893,68 @@ function renderPlayer() {
     if (!epId) return;
 
     container.appendChild(createPlayerEmbed(epId, state.watch.language));
+
+    // Render episode nav buttons below the player
+    renderEpisodeNav();
+}
+
+function renderEpisodeNav() {
+    // Remove existing nav
+    let nav = document.querySelector('.episode-nav');
+    if (nav) nav.remove();
+
+    const episodes = state.watch.episodes;
+    if (episodes.length <= 1 || !state.watch.currentEpId) return;
+
+    const currentIdx = episodes.findIndex(ep => ep.episodeId === state.watch.currentEpId);
+    if (currentIdx === -1) return;
+
+    const hasPrev = currentIdx > 0;
+    const hasNext = currentIdx < episodes.length - 1;
+
+    // Only show if there's at least one direction
+    if (!hasPrev && !hasNext) return;
+
+    const container = $('#playerContainer');
+    if (!container) return;
+
+    nav = document.createElement('div');
+    nav.className = 'episode-nav';
+
+    if (hasPrev) {
+        const prevEp = episodes[currentIdx - 1];
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'btn btn--outline episode-nav__btn';
+        prevBtn.innerHTML = `← Ep ${prevEp.number}`;
+        prevBtn.title = prevEp.title || `Episode ${prevEp.number}`;
+        prevBtn.addEventListener('click', () => selectEpisode(prevEp));
+        nav.appendChild(prevBtn);
+    } else {
+        // Spacer
+        nav.appendChild(document.createElement('span'));
+    }
+
+    // Current episode label
+    const currentEp = episodes[currentIdx];
+    const label = document.createElement('span');
+    label.className = 'episode-nav__current';
+    label.textContent = `Episode ${currentEp.number}`;
+    nav.appendChild(label);
+
+    if (hasNext) {
+        const nextEp = episodes[currentIdx + 1];
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'btn btn--outline episode-nav__btn';
+        nextBtn.innerHTML = `Ep ${nextEp.number} →`;
+        nextBtn.title = nextEp.title || `Episode ${nextEp.number}`;
+        nextBtn.addEventListener('click', () => selectEpisode(nextEp));
+        nav.appendChild(nextBtn);
+    } else {
+        nav.appendChild(document.createElement('span'));
+    }
+
+    // Insert after the player container
+    container.parentNode.insertBefore(nav, container.nextSibling);
 }
 
 // Expose for debugging
