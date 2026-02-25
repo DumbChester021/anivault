@@ -308,7 +308,6 @@ async function initSearchFilters() {
     // Mobile filter toggle
     const filterToggle = $('#filterToggle');
     const filterPanel = $('#filterPanel');
-    const filterPanelClose = $('#filterPanelClose');
 
     if (filterToggle && filterPanel) {
         filterToggle.addEventListener('click', () => {
@@ -316,12 +315,14 @@ async function initSearchFilters() {
             filterToggle.classList.toggle('active');
         });
     }
-    if (filterPanelClose && filterPanel) {
-        filterPanelClose.addEventListener('click', () => {
+
+    // Hide filters buttons (top + bottom inside panel)
+    $$('.filter-panel__hide').forEach(btn => {
+        btn.addEventListener('click', () => {
             filterPanel.classList.remove('filter-panel--open');
             if (filterToggle) filterToggle.classList.remove('active');
         });
-    }
+    });
 }
 
 function applyQuickFilter(values) {
