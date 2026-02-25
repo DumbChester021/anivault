@@ -151,13 +151,13 @@ function buildUrl(endpoint, params = {}) {
 
 async function fetchWithRetry(url, attempt = 1) {
     try {
-        console.log(`[Jikan] GET ${url} (attempt ${attempt})`);
+
         const resp = await fetch(url);
 
         // Success
         if (resp.ok) {
             const data = await resp.json();
-            console.log(`[Jikan] ✓ ${resp.status} ${url}`);
+
             return data;
         }
 
@@ -216,7 +216,7 @@ export async function jikanGet(endpoint, params = {}, opts = {}) {
     if (!opts.skipCache) {
         const cached = cache.get(url);
         if (cached) {
-            console.log(`[Jikan] ⚡ Cache hit: ${url}`);
+
             return cached;
         }
     }

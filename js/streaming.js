@@ -19,8 +19,6 @@ export const LANGUAGES = { SUB: 'sub', DUB: 'dub' };
  */
 export async function searchHianime(query, page = 1) {
     const url = `${HIANIME_API_BASE}/api/v2/hianime/search?q=${encodeURIComponent(query)}&page=${page}`;
-    console.log(`[Hianime] Search: ${url}`);
-
     const resp = await fetch(url);
     if (!resp.ok) {
         throw new Error(`Hianime search failed (${resp.status})`);
@@ -40,8 +38,6 @@ export async function searchHianime(query, page = 1) {
  */
 export async function getAnimeInfo(animeId) {
     const url = `${HIANIME_API_BASE}/api/v2/hianime/anime/${encodeURIComponent(animeId)}`;
-    console.log(`[Hianime] Info: ${url}`);
-
     const resp = await fetch(url);
     if (!resp.ok) {
         throw new Error(`Hianime anime info failed (${resp.status})`);
@@ -61,8 +57,6 @@ export async function getAnimeInfo(animeId) {
  */
 export async function getEpisodes(animeId) {
     const url = `${HIANIME_API_BASE}/api/v2/hianime/anime/${encodeURIComponent(animeId)}/episodes`;
-    console.log(`[Hianime] Episodes: ${url}`);
-
     const resp = await fetch(url);
     if (!resp.ok) {
         throw new Error(`Hianime episodes failed (${resp.status})`);

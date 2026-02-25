@@ -601,7 +601,6 @@ async function performWatchSearch(query, autoSelect = false) {
         if (autoSelect) {
             const bestMatch = findBestMatch(query, data.animes);
             if (bestMatch) {
-                console.log(`[Watch] Auto-selected: "${bestMatch.name}"`);
                 await selectWatchAnime(bestMatch);
                 return;
             }
