@@ -708,6 +708,14 @@ img {
     margin-bottom: 16px;
 }
 
+.filter-panel__close {
+    display: none;
+}
+
+.filter-panel__header {
+    margin-bottom: 0;
+}
+
 @media (max-width: 1024px) {
     .search-layout {
         grid-template-columns: 1fr;
@@ -715,6 +723,33 @@ img {
 
     .filter-toggle {
         display: flex;
+    }
+
+    .filter-panel__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+    }
+
+    .filter-panel__close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--border-glass);
+        border-radius: var(--radius-sm);
+        background: var(--bg-glass);
+        color: var(--text-primary);
+        font-size: 1.1rem;
+        cursor: pointer;
+        transition: all var(--duration) var(--ease);
+    }
+
+    .filter-panel__close:hover {
+        background: var(--bg-hover);
+        border-color: var(--accent);
     }
 
     .filter-panel {

@@ -308,10 +308,18 @@ async function initSearchFilters() {
     // Mobile filter toggle
     const filterToggle = $('#filterToggle');
     const filterPanel = $('#filterPanel');
+    const filterPanelClose = $('#filterPanelClose');
+
     if (filterToggle && filterPanel) {
         filterToggle.addEventListener('click', () => {
             filterPanel.classList.toggle('filter-panel--open');
             filterToggle.classList.toggle('active');
+        });
+    }
+    if (filterPanelClose && filterPanel) {
+        filterPanelClose.addEventListener('click', () => {
+            filterPanel.classList.remove('filter-panel--open');
+            if (filterToggle) filterToggle.classList.remove('active');
         });
     }
 }
