@@ -12,7 +12,7 @@ import { el, formatScore, formatNumber, truncate, formatDate, escapeHtml, $, $$ 
  * @param {Object} anime — Jikan anime object
  * @param {Function} onClick — callback(anime)
  */
-export function createAnimeCard(anime, onClick) {
+export function createAnimeCard(anime, onClick, index = 0) {
     const img = anime.images?.jpg?.large_image_url || anime.images?.jpg?.image_url || '';
     const title = anime.title_english || anime.title || '';
     const score = formatScore(anime.score);
@@ -28,14 +28,22 @@ export function createAnimeCard(anime, onClick) {
         seasonText = `${anime.year}`;
     }
 
-    const card = el('div', { className: 'anime-card', dataset: { malId: anime.mal_id } },
+    const imgEl = el('img', {
+        className: 'anime-card__image',
+        src: img,
+        alt: title,
+        loading: 'lazy',
+    });
+    imgEl.onerror = function () {
+        this.onerror = null;
+        this.style.display = 'none';
+        const fallback = el('div', { className: 'anime-card__image anime-card__image--fallback' }, '🎬');
+        this.parentNode.appendChild(fallback);
+    };
+
+    const card = el('div', { className: 'anime-card', style: `--i:${index}`, dataset: { malId: anime.mal_id } },
         el('div', { className: 'anime-card__image-wrap' },
-            el('img', {
-                className: 'anime-card__image',
-                src: img,
-                alt: title,
-                loading: 'lazy',
-            }),
+            imgEl,
             score !== 'N/A'
                 ? el('span', { className: 'anime-card__score' }, `★ ${score}`)
                 : null,
@@ -90,8 +98,8 @@ export function showSkeletons(container, count = 12) {
 export function createCarousel(title, animeList, onCardClick) {
     const track = el('div', { className: 'carousel__track' });
 
-    for (const anime of animeList) {
-        track.appendChild(createAnimeCard(anime, onCardClick));
+    for (let i = 0; i < animeList.length; i++) {
+        track.appendChild(createAnimeCard(animeList[i], onCardClick, i));
     }
 
     const section = el('section', { className: 'carousel' },
@@ -150,8 +158,8 @@ export function createHeroBanner(anime, onCardClick) {
 
 export function createResultsGrid(animeList, onCardClick) {
     const grid = el('div', { className: 'results-grid' });
-    for (const anime of animeList) {
-        grid.appendChild(createAnimeCard(anime, onCardClick));
+    for (let i = 0; i < animeList.length; i++) {
+        grid.appendChild(createAnimeCard(animeList[i], onCardClick, i));
     }
     return grid;
 }

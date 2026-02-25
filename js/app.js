@@ -2,7 +2,7 @@
  * app.js — Router, page controllers, initialization
  */
 
-import { $, $$, debounce } from './utils.js';
+import { $, $$, debounce, showToast } from './utils.js';
 import * as api from './api.js';
 import * as streaming from './streaming.js';
 import {
@@ -55,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupWatchEvents();
     setupFilterPanel();
     setupNsfwToggle();
+    setupBackToTop();
+    setupKeyboardShortcuts();
     navigateTo('home');
 });
 
@@ -307,6 +309,7 @@ async function initSearchFilters() {
                 state.search.page = 1;
                 performSearch();
             });
+            showToast('Filters cleared', 'success');
         });
     }
 }
@@ -412,6 +415,11 @@ function setupNsfwToggle() {
             searchInitialized = true;
             performSearch();
         }
+
+        showToast(
+            toggle.checked ? '18+ content enabled' : 'SFW mode enabled',
+            toggle.checked ? 'warning' : 'success'
+        );
     });
 }
 
@@ -505,8 +513,9 @@ async function performSearch(append = false) {
         } else {
             // Render cards directly into the results-grid container
             const animesToRender = append ? newResults : state.search.results;
-            for (const anime of animesToRender) {
-                resultsContainer.appendChild(createAnimeCard(anime, (a) => showAnimeDetail(a.mal_id)));
+            let baseIndex = append ? state.search.results.length - newResults.length : 0;
+            for (let i = 0; i < animesToRender.length; i++) {
+                resultsContainer.appendChild(createAnimeCard(animesToRender[i], (a) => showAnimeDetail(a.mal_id), baseIndex + i));
             }
         }
 
@@ -533,6 +542,14 @@ async function performSearch(append = false) {
         ));
     } finally {
         state.search.loading = false;
+        updateFilterBadge();
+
+        // Scroll results into view on fresh search (not append)
+        if (!append && resultsContainer && state.search.results.length > 0) {
+            setTimeout(() => {
+                resultsContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        }
     }
 }
 
@@ -877,3 +894,56 @@ function renderPlayer() {
 
 // Expose for debugging
 window.__animeAppState = state;
+
+// ─── Back to Top ─────────────────────────────────────────────────────
+function setupBackToTop() {
+    const btn = $('#backToTop');
+    if (!btn) return;
+
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('back-to-top--visible', window.scrollY > 400);
+    }, { passive: true });
+
+    btn.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+}
+
+// ─── Keyboard Shortcuts ──────────────────────────────────────────────
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // '/' to focus search — only when not typing in an input
+        if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+            e.preventDefault();
+            navigateTo('search');
+            setTimeout(() => {
+                const input = $('#searchInput');
+                if (input) input.focus();
+            }, 100);
+        }
+    });
+}
+
+// ─── Filter Badge ────────────────────────────────────────────────────
+function updateFilterBadge() {
+    const badge = $('#filterCount');
+    if (!badge) return;
+
+    const s = state.search;
+    let count = 0;
+    if (s.query) count++;
+    if (s.type) count++;
+    if (s.status) count++;
+    if (s.rating) count++;
+    if (s.min_score) count++;
+    if (s.max_score) count++;
+    if (s.order_by) count++;
+    count += s.genres.size;
+
+    if (count > 0) {
+        badge.textContent = count;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
+    }
+}

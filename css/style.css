@@ -538,6 +538,8 @@ img {
     cursor: pointer;
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
+    animation: fadeInUp 0.4s var(--ease) both;
+    animation-delay: calc(var(--i, 0) * 50ms);
 }
 
 .anime-card:hover {
@@ -769,6 +771,7 @@ img {
 .filter-toggle {
     display: none;
     margin-bottom: 16px;
+    position: relative;
 }
 
 .filter-panel__hide {
@@ -1853,4 +1856,176 @@ body::before {
 ::selection {
     background: var(--accent);
     color: #fff;
+}
+
+/* ─── Card Entrance Animation ─────────────────────────────────────── */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.anime-card--skeleton {
+    animation: none;
+}
+
+/* ─── Image Fallback ──────────────────────────────────────────────── */
+.anime-card__image--fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--bg-surface), var(--bg-secondary));
+    color: var(--text-muted);
+    font-size: 2rem;
+    opacity: 0.5;
+}
+
+/* ─── Filter Count Badge ──────────────────────────────────────────── */
+.filter-toggle__count {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--gradient-accent);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px var(--accent-glow);
+    animation: fadeInUp 0.3s var(--ease);
+}
+
+/* ─── Back to Top Button ──────────────────────────────────────────── */
+.back-to-top {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 1px solid var(--border-glass);
+    background: rgba(17, 24, 39, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    color: var(--text-primary);
+    font-size: 1.3rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px);
+    transition: all var(--duration) var(--ease);
+    z-index: 800;
+    box-shadow: var(--shadow-md);
+}
+
+.back-to-top--visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.back-to-top:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 4px 20px var(--accent-glow);
+    transform: translateY(-2px);
+}
+
+@media (max-width: 768px) {
+    .back-to-top {
+        bottom: 20px;
+        right: 20px;
+        width: 42px;
+        height: 42px;
+    }
+}
+
+/* ─── Toast Notifications ─────────────────────────────────────────── */
+.toast-container {
+    position: fixed;
+    top: calc(var(--nav-height) + 12px);
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 10000;
+    pointer-events: none;
+}
+
+.toast {
+    padding: 12px 20px;
+    border-radius: var(--radius-sm);
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-glass);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    font-family: var(--font);
+    box-shadow: var(--shadow-lg);
+    pointer-events: auto;
+    animation: toastIn 0.35s var(--ease) both;
+    max-width: 340px;
+}
+
+.toast--success {
+    border-color: rgba(34, 197, 94, 0.4);
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+}
+
+.toast--warning {
+    border-color: rgba(251, 191, 36, 0.4);
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+}
+
+.toast--error {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+}
+
+.toast--out {
+    animation: toastOut 0.3s var(--ease) both;
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateX(40px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes toastOut {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateX(40px);
+    }
 }
