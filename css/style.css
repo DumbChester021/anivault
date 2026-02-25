@@ -723,7 +723,11 @@ img {
 
     .filter-panel__hide {
         display: flex;
+        align-items: center;
+        justify-content: center;
         margin-bottom: 12px;
+        position: relative;
+        z-index: 10;
     }
 
     #filterPanelHideBottom {

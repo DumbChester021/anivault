@@ -309,6 +309,11 @@ async function initSearchFilters() {
     const filterToggle = $('#filterToggle');
     const filterPanel = $('#filterPanel');
 
+    function closeFilterPanel() {
+        if (filterPanel) filterPanel.classList.remove('filter-panel--open');
+        if (filterToggle) filterToggle.classList.remove('active');
+    }
+
     if (filterToggle && filterPanel) {
         filterToggle.addEventListener('click', () => {
             filterPanel.classList.toggle('filter-panel--open');
@@ -317,10 +322,12 @@ async function initSearchFilters() {
     }
 
     // Hide filters buttons (top + bottom inside panel)
-    $$('.filter-panel__hide').forEach(btn => {
-        btn.addEventListener('click', () => {
-            filterPanel.classList.remove('filter-panel--open');
-            if (filterToggle) filterToggle.classList.remove('active');
+    const hideButtons = document.querySelectorAll('.filter-panel__hide');
+    hideButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeFilterPanel();
         });
     });
 }
