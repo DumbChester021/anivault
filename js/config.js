@@ -13,3 +13,6 @@ export const HIANIME_API_BASE = 'https://anivault-hianime-api.vercel.app';
 
 // MegaPlay embed player
 export const MEGAPLAY_BASE = 'https://megaplay.buzz/stream/s-2';
+
+// NSFW genre IDs to filter out in SFW mode (Hentai, Erotica)
+export const NSFW_GENRE_IDS = [12, 49];

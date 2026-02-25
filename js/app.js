@@ -19,6 +19,7 @@ import {
 // ─── State ───────────────────────────────────────────────────────────
 const state = {
     currentPage: 'home',
+    nsfwEnabled: JSON.parse(localStorage.getItem('anivault_nsfw') || 'false'),
     search: {
         query: '',
         type: '',
@@ -47,10 +48,13 @@ const state = {
 
 // ─── Init ────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+    // Sync SFW mode with saved preference
+    api.setSfwMode(!state.nsfwEnabled);
     setupNav();
     setupCustomDetailEvent();
     setupWatchEvents();
     setupFilterPanel();
+    setupNsfwToggle();
     navigateTo('home');
 });
 
@@ -175,7 +179,7 @@ async function initSearchFilters() {
     if (!genreContainer) return;
 
     try {
-        const genreData = await api.getGenres();
+        const genreData = await api.getFilteredGenres();
         state.genresList = genreData.data || [];
         renderGenreChips(genreContainer, state.genresList, state.search.genres, () => {
             // Reset page on genre change
@@ -346,6 +350,68 @@ function setupFilterPanel() {
         };
         btn.addEventListener('click', handler);
         btn.addEventListener('touchend', handler);
+    });
+}
+
+// ─── NSFW Toggle ─────────────────────────────────────────────────────
+function setupNsfwToggle() {
+    const toggle = $('#nsfwToggle');
+    const rxOption = $('#ratingRx');
+
+    // Sync initial state
+    if (toggle) toggle.checked = state.nsfwEnabled;
+    if (rxOption) rxOption.style.display = state.nsfwEnabled ? '' : 'none';
+
+    if (!toggle) return;
+
+    toggle.addEventListener('change', async () => {
+        state.nsfwEnabled = toggle.checked;
+        localStorage.setItem('anivault_nsfw', JSON.stringify(state.nsfwEnabled));
+        api.setSfwMode(!state.nsfwEnabled);
+
+        // Show/hide rx rating option
+        if (rxOption) rxOption.style.display = state.nsfwEnabled ? '' : 'none';
+
+        // If rx was selected and we're going SFW, reset rating filter
+        if (!state.nsfwEnabled && state.search.rating === 'rx') {
+            state.search.rating = '';
+            const ratingSelect = $('#filterRating');
+            if (ratingSelect) ratingSelect.value = '';
+        }
+
+        // Clear caches & remove selected NSFW genres
+        api.clearCache();
+        if (!state.nsfwEnabled) {
+            const { NSFW_GENRE_IDS } = await import('./config.js');
+            for (const gid of NSFW_GENRE_IDS) {
+                state.search.genres.delete(gid);
+            }
+        }
+
+        // Re-render genre chips
+        const genreContainer = $('#genreChips');
+        if (genreContainer) {
+            try {
+                const genreData = await api.getFilteredGenres();
+                state.genresList = genreData.data || [];
+                renderGenreChips(genreContainer, state.genresList, state.search.genres, () => {
+                    state.search.page = 1;
+                    performSearch();
+                });
+            } catch (err) {
+                console.error('[NSFW Toggle] Failed to reload genres:', err);
+            }
+        }
+
+        // Reload home page and re-run search if active
+        homeLoaded = false;
+        searchInitialized = false;
+        if (state.currentPage === 'home') loadHomePage();
+        if (state.currentPage === 'search') {
+            await initSearchFilters();
+            searchInitialized = true;
+            performSearch();
+        }
     });
 }
 

@@ -11,7 +11,7 @@
  *  - Detailed console logging
  */
 
-import { JIKAN_API_BASE } from './config.js';
+import { JIKAN_API_BASE, NSFW_GENRE_IDS } from './config.js';
 
 const BASE_URL = JIKAN_API_BASE;
 
@@ -133,14 +133,23 @@ const rateLimiter = new RateLimiter();
 // Permanent cache for genres (they don't change)
 let _genresCache = null;
 
+// ─── SFW Mode (default: on) ──────────────────────────────────────────
+let _sfwMode = true;
+
+/** Set SFW mode on/off. When on, NSFW content is filtered. */
+export function setSfwMode(enabled) { _sfwMode = enabled; }
+
+/** Check if SFW mode is currently active. */
+export function isSfwMode() { return _sfwMode; }
+
 // ─── Core Fetch with Retry ───────────────────────────────────────────
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
 
 function buildUrl(endpoint, params = {}) {
     const url = new URL(`${BASE_URL}${endpoint}`);
-    // Always enforce SFW unless explicitly overridden
-    if (!('sfw' in params)) params.sfw = 'true';
+    // Enforce SFW based on current mode, unless explicitly overridden
+    if (!('sfw' in params) && _sfwMode) params.sfw = 'true';
     for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null && value !== '') {
             url.searchParams.set(key, value);
@@ -286,6 +295,19 @@ export async function getGenres() {
     const data = await jikanGet('/genres/anime', {}, { cacheTTL: 24 * 60 * 60 * 1000 });
     _genresCache = data;
     return data;
+}
+
+/**
+ * Get genres filtered for current SFW mode.
+ * Returns a copy with NSFW genres removed when SFW is on.
+ */
+export async function getFilteredGenres() {
+    const data = await getGenres();
+    if (!_sfwMode) return data;
+    return {
+        ...data,
+        data: (data.data || []).filter(g => !NSFW_GENRE_IDS.includes(g.mal_id)),
+    };
 }
 
 /**
