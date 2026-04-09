@@ -438,22 +438,22 @@ export function createEmptyState(message = 'No results found') {
 // ─── Watch Page Components ───────────────────────────────────────────
 
 /**
- * Create a search result item for the watch page (hianime result).
+ * Create a search result item for the watch page (AnimeKai result).
  */
 export function createWatchSearchItem(anime, onClick) {
+    const hasDub = anime.subOrDub === 'dub' || anime.subOrDub === 'both';
     const item = el('div', { className: 'watch-search-item' },
         el('img', {
             className: 'watch-search-item__poster',
-            src: anime.poster || '',
-            alt: anime.name || '',
+            src: anime.image || '',
+            alt: anime.title || '',
             loading: 'lazy',
         }),
         el('div', { className: 'watch-search-item__info' },
-            el('h4', { className: 'watch-search-item__name' }, anime.name || ''),
+            el('h4', { className: 'watch-search-item__name' }, anime.title || ''),
             el('div', { className: 'watch-search-item__meta' },
                 anime.type ? el('span', { className: 'tag' }, anime.type) : null,
-                anime.episodes?.sub ? el('span', {}, `${anime.episodes.sub} eps`) : null,
-                anime.episodes?.dub ? el('span', { className: 'text-accent' }, `${anime.episodes.dub} dub`) : null,
+                hasDub ? el('span', { className: 'text-accent' }, 'DUB') : null,
             ),
         ),
     );
@@ -466,16 +466,16 @@ export function createWatchSearchItem(anime, onClick) {
  */
 export function createWatchAnimeHeader(anime) {
     return el('div', { className: 'watch-anime-card' },
-        anime.poster
+        anime.image
             ? el('img', {
                 className: 'watch-anime-card__poster',
-                src: anime.poster,
-                alt: anime.name || '',
+                src: anime.image,
+                alt: anime.title || '',
                 loading: 'lazy',
             })
             : null,
         el('div', { className: 'watch-anime-card__info' },
-            el('h3', { className: 'watch-anime-card__name' }, anime.name || ''),
+            el('h3', { className: 'watch-anime-card__name' }, anime.title || ''),
             el('button', {
                 className: 'btn btn--outline btn--sm watch-anime-card__back',
                 onClick: () => document.dispatchEvent(new CustomEvent('watchReset')),
@@ -489,7 +489,7 @@ export function createWatchAnimeHeader(anime) {
  */
 export function createEpisodeItem(ep, isActive, onClick) {
     const classes = `episode-item${isActive ? ' episode-item--active' : ''}${ep.isFiller ? ' episode-item--filler' : ''}`;
-    const item = el('div', { className: classes, dataset: { epId: ep.episodeId } },
+    const item = el('div', { className: classes, dataset: { epId: ep.id } },
         el('span', { className: 'episode-item__number' }, `${ep.number}`),
         el('span', { className: 'episode-item__title' }, ep.title || `Episode ${ep.number}`),
         ep.isFiller ? el('span', { className: 'episode-item__filler-tag' }, 'Filler') : null,
@@ -499,26 +499,37 @@ export function createEpisodeItem(ep, isActive, onClick) {
 }
 
 /**
- * Create the embedded player iframe.
+ * Create a video player element for HLS or MP4 sources.
+ * HLS initialization is done by the caller using HLS.js.
+ * @param {Array<{url: string, isM3U8: boolean}>} sources
  */
-export function createPlayerEmbed(epId, language = 'sub') {
-    const src = `https://megaplay.buzz/stream/s-2/${epId}/${language}`;
-    return el('iframe', {
-        className: 'player-iframe',
-        src,
-        frameborder: '0',
-        allowfullscreen: '',
-        allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',
-        referrerpolicy: 'origin',
+export function createVideoPlayer(sources) {
+    const m3u8 = sources.find(s => s.isM3U8);
+    const mp4 = sources.find(s => !s.isM3U8);
+    const src = m3u8?.url || mp4?.url || '';
+
+    const video = el('video', {
+        className: 'player-video',
+        controls: true,
+        autoplay: true,
+        id: 'animePlayer',
     });
+
+    if (m3u8) {
+        video.dataset.hlsSrc = m3u8.url;
+    } else {
+        video.src = src;
+    }
+
+    return video;
 }
 
 /**
  * Create a "Watch" button for the detail modal.
- * Only shows for types likely available on hianime.
+ * Only shows for types likely available on AnimeKai.
  */
 export function createWatchButton(anime) {
-    // Types unlikely to be on hianime
+    // Types unlikely to be on AnimeKai
     const type = (anime.type || '').toLowerCase();
     const excludedTypes = ['music'];
     if (excludedTypes.includes(type)) return null;

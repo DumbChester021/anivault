@@ -1,94 +1,50 @@
 /**
- * streaming.js — Hianime API + MegaPlay embed integration
+ * streaming.js — Consumet AnimeKai integration
  *
- * Uses a self-hosted aniwatch-api instance to search anime
- * and resolve episode IDs, then builds MegaPlay embed URLs.
+ * Wraps the self-hosted Consumet API (animekai provider) to:
+ *  - Search anime
+ *  - Fetch episode lists
+ *  - Fetch streaming sources (MegaUp → m3u8/mp4)
  */
 
-import { HIANIME_API_BASE, MEGAPLAY_BASE } from './config.js';
-
-export const LANGUAGES = { SUB: 'sub', DUB: 'dub' };
-
-// ─── Hianime API Calls ──────────────────────────────────────────────
+import { CONSUMET_API_BASE } from './config.js';
 
 /**
- * Search hianime for anime by title.
- * @param {string} query — anime title
+ * Search AnimeKai for anime by title.
+ * @param {string} query
  * @param {number} page
- * @returns {Promise<{animes: Array, totalPages: number, hasNextPage: boolean}>}
+ * @returns {Promise<{currentPage, hasNextPage, results: Array}>}
+ *   results items: { id, title, image, subOrDub, type, ... }
  */
-export async function searchHianime(query, page = 1) {
-    const url = `${HIANIME_API_BASE}/api/v2/hianime/search?q=${encodeURIComponent(query)}&page=${page}`;
+export async function searchAnimekai(query, page = 1) {
+    const url = `${CONSUMET_API_BASE}/anime/animekai/${encodeURIComponent(query)}?page=${page}`;
     const resp = await fetch(url);
-    if (!resp.ok) {
-        throw new Error(`Hianime search failed (${resp.status})`);
-    }
-
-    const json = await resp.json();
-    if (json.status !== 200) {
-        throw new Error('Hianime search returned unsuccessful response');
-    }
-    return json.data;
+    if (!resp.ok) throw new Error(`AnimeKai search failed (${resp.status})`);
+    return resp.json();
 }
 
 /**
- * Get anime details from hianime.
- * @param {string} animeId — e.g. 'steinsgate-3'
+ * Get full anime info + episode list from AnimeKai.
+ * @param {string} id — AnimeKai anime ID (e.g. 'steinsgate')
  * @returns {Promise<Object>}
+ *   { id, title, episodes: [{id, number, title, isFiller, isSubbed, isDubbed}] }
  */
-export async function getAnimeInfo(animeId) {
-    const url = `${HIANIME_API_BASE}/api/v2/hianime/anime/${encodeURIComponent(animeId)}`;
+export async function getAnimekaiInfo(id) {
+    const url = `${CONSUMET_API_BASE}/anime/animekai/info?id=${encodeURIComponent(id)}`;
     const resp = await fetch(url);
-    if (!resp.ok) {
-        throw new Error(`Hianime anime info failed (${resp.status})`);
-    }
-
-    const json = await resp.json();
-    if (json.status !== 200) {
-        throw new Error('Hianime anime info returned unsuccessful response');
-    }
-    return json.data;
+    if (!resp.ok) throw new Error(`AnimeKai info failed (${resp.status})`);
+    return resp.json();
 }
 
 /**
- * Get episodes for an anime.
- * @param {string} animeId — e.g. 'steinsgate-3'
- * @returns {Promise<{totalEpisodes: number, episodes: Array<{number, title, episodeId, isFiller}>}>}
+ * Fetch streaming sources for an episode.
+ * @param {string} episodeId — episode ID from getAnimekaiInfo
+ * @param {boolean} dub — true for dub, false for sub
+ * @returns {Promise<{sources: Array<{url, isM3U8}>, subtitles: Array}>}
  */
-export async function getEpisodes(animeId) {
-    const url = `${HIANIME_API_BASE}/api/v2/hianime/anime/${encodeURIComponent(animeId)}/episodes`;
+export async function getEpisodeSources(episodeId, dub = false) {
+    const url = `${CONSUMET_API_BASE}/anime/animekai/watch?id=${encodeURIComponent(episodeId)}&server=megaup&dub=${dub}`;
     const resp = await fetch(url);
-    if (!resp.ok) {
-        throw new Error(`Hianime episodes failed (${resp.status})`);
-    }
-
-    const json = await resp.json();
-    if (json.status !== 200) {
-        throw new Error('Hianime episodes returned unsuccessful response');
-    }
-    return json.data;
-}
-
-// ─── Episode ID Helpers ──────────────────────────────────────────────
-
-/**
- * Extract the numeric ep ID from a hianime episodeId string.
- * e.g. 'steinsgate-3?ep=213' → '213'
- */
-export function extractEpId(episodeId) {
-    if (!episodeId) return null;
-    const match = episodeId.match(/[?&]ep=(\d+)/);
-    return match ? match[1] : null;
-}
-
-// ─── MegaPlay Embed ──────────────────────────────────────────────────
-
-/**
- * Build a MegaPlay embed URL.
- * @param {string} epId — numeric episode ID from hianime
- * @param {string} language — 'sub' or 'dub'
- * @returns {string}
- */
-export function buildEmbedUrl(epId, language = LANGUAGES.SUB) {
-    return `${MEGAPLAY_BASE}/${epId}/${language}`;
+    if (!resp.ok) throw new Error(`AnimeKai watch failed (${resp.status})`);
+    return resp.json();
 }

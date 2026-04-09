@@ -13,7 +13,7 @@ import {
     renderGenreChips, createErrorCard, createEmptyState,
     createSkeletonCard,
     createWatchSearchItem, createWatchAnimeHeader, createEpisodeItem,
-    createPlayerEmbed,
+    createVideoPlayer,
 } from './components.js';
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ const state = {
     genresList: [],
     watch: {
         searchQuery: '',
-        selectedAnime: null, // { id, name, poster, ... } from hianime
+        selectedAnime: null, // { id, title, image, subOrDub, ... } from AnimeKai
         episodes: [],
         currentEpId: null,
         language: 'sub',
@@ -691,24 +691,24 @@ async function performWatchSearch(query, autoSelect = false) {
     resultsContainer.innerHTML = '<p class="loading-text">Searching...</p>';
 
     try {
-        const data = await streaming.searchHianime(query);
+        const data = await streaming.searchAnimekai(query);
         resultsContainer.innerHTML = '';
 
-        if (!data.animes || data.animes.length === 0) {
-            resultsContainer.appendChild(createEmptyState('No anime found on hianime'));
+        if (!data.results || data.results.length === 0) {
+            resultsContainer.appendChild(createEmptyState('No anime found on AnimeKai'));
             return;
         }
 
         // Auto-select: find best match and skip the search results UI
         if (autoSelect) {
-            const bestMatch = findBestMatch(query, data.animes);
+            const bestMatch = findBestMatch(query, data.results);
             if (bestMatch) {
                 await selectWatchAnime(bestMatch);
                 return;
             }
         }
 
-        for (const anime of data.animes) {
+        for (const anime of data.results) {
             resultsContainer.appendChild(createWatchSearchItem(anime, selectWatchAnime));
         }
     } catch (err) {
@@ -722,7 +722,7 @@ async function performWatchSearch(query, autoSelect = false) {
 }
 
 /**
- * Find the best matching anime from hianime results given a Jikan title.
+ * Find the best matching anime from AnimeKai results given a Jikan title.
  * Uses normalized string matching.
  */
 function findBestMatch(query, animes) {
@@ -731,15 +731,14 @@ function findBestMatch(query, animes) {
 
     // Try exact normalized match first
     for (const anime of animes) {
-        const name = normalize(anime.name || '');
-        const jname = normalize(anime.jname || '');
-        if (name === q || jname === q) return anime;
+        const title = normalize(anime.title || '');
+        if (title === q) return anime;
     }
 
-    // Try inclusion match (query contains anime name or vice versa)
+    // Try inclusion match (query contains anime title or vice versa)
     for (const anime of animes) {
-        const name = normalize(anime.name || '');
-        if (name && (q.includes(name) || name.includes(q))) return anime;
+        const title = normalize(anime.title || '');
+        if (title && (q.includes(title) || title.includes(q))) return anime;
     }
 
     // Fall back to first result if it's a TV series (most likely correct)
@@ -756,7 +755,7 @@ async function selectWatchAnime(anime) {
     state.watch.currentEpId = null;
 
     // Smart language: default to sub, only allow dub if available
-    const hasDub = anime.episodes?.dub && anime.episodes.dub > 0;
+    const hasDub = anime.subOrDub === 'dub' || anime.subOrDub === 'both';
     if (!hasDub && state.watch.language === 'dub') {
         state.watch.language = 'sub';
     }
@@ -777,7 +776,7 @@ async function loadEpisodes(animeId) {
     episodeList.innerHTML = '<p class="loading-text">Loading episodes...</p>';
 
     try {
-        const data = await streaming.getEpisodes(animeId);
+        const data = await streaming.getAnimekaiInfo(animeId);
         state.watch.episodes = data.episodes || [];
 
         renderEpisodeList();
@@ -823,7 +822,7 @@ function updateLangToggle() {
     if (!langToggle) return;
 
     const anime = state.watch.selectedAnime;
-    const hasDub = anime?.episodes?.dub && anime.episodes.dub > 0;
+    const hasDub = anime?.subOrDub === 'dub' || anime?.subOrDub === 'both';
 
     langToggle.querySelectorAll('.lang-toggle__btn').forEach(btn => {
         const lang = btn.dataset.lang;
@@ -849,19 +848,13 @@ function renderEpisodeList() {
     }
 
     for (const ep of state.watch.episodes) {
-        const isActive = ep.episodeId === state.watch.currentEpId;
+        const isActive = ep.id === state.watch.currentEpId;
         episodeList.appendChild(createEpisodeItem(ep, isActive, selectEpisode));
     }
 }
 
 function selectEpisode(ep) {
-    const epId = streaming.extractEpId(ep.episodeId);
-    if (!epId) {
-        console.error('[Watch] Could not extract ep ID from:', ep.episodeId);
-        return;
-    }
-
-    state.watch.currentEpId = ep.episodeId;
+    state.watch.currentEpId = ep.id;
     renderEpisodeList(); // Update active state
     renderPlayer();
 
@@ -870,7 +863,7 @@ function selectEpisode(ep) {
     if (sidebar) sidebar.classList.remove('watch-sidebar--open');
 }
 
-function renderPlayer() {
+async function renderPlayer() {
     const container = $('#playerContainer');
     if (!container) return;
 
@@ -883,18 +876,59 @@ function renderPlayer() {
                 <p>Search for an anime and select an episode to start watching</p>
             </div>
         `;
-        // Remove any existing ep nav
         const existingNav = document.querySelector('.episode-nav');
         if (existingNav) existingNav.remove();
         return;
     }
 
-    const epId = streaming.extractEpId(state.watch.currentEpId);
-    if (!epId) return;
+    // Loading state
+    container.innerHTML = `
+        <div class="player-placeholder">
+            <div class="player-placeholder__icon">⏳</div>
+            <p>Loading stream...</p>
+        </div>
+    `;
 
-    container.appendChild(createPlayerEmbed(epId, state.watch.language));
+    try {
+        const isDub = state.watch.language === 'dub';
+        const data = await streaming.getEpisodeSources(state.watch.currentEpId, isDub);
+        const sources = data.sources || [];
 
-    // Render episode nav buttons below the player
+        if (!sources.length) {
+            container.innerHTML = `
+                <div class="player-placeholder">
+                    <div class="player-placeholder__icon">⚠</div>
+                    <p>No sources available for this episode.</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = '';
+        const video = createVideoPlayer(sources);
+        container.appendChild(video);
+
+        // Initialize HLS.js for m3u8 sources
+        if (video.dataset.hlsSrc) {
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const hls = new Hls();
+                hls.loadSource(video.dataset.hlsSrc);
+                hls.attachMedia(video);
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS (Safari)
+                video.src = video.dataset.hlsSrc;
+            }
+        }
+
+    } catch (err) {
+        console.error('[Player]', err);
+        container.innerHTML = '';
+        container.appendChild(createErrorCard(
+            `Failed to load stream: ${err.message}`,
+            () => renderPlayer(),
+        ));
+    }
+
     renderEpisodeNav();
 }
 
@@ -906,7 +940,7 @@ function renderEpisodeNav() {
     const episodes = state.watch.episodes;
     if (episodes.length <= 1 || !state.watch.currentEpId) return;
 
-    const currentIdx = episodes.findIndex(ep => ep.episodeId === state.watch.currentEpId);
+    const currentIdx = episodes.findIndex(ep => ep.id === state.watch.currentEpId);
     if (currentIdx === -1) return;
 
     const hasPrev = currentIdx > 0;
