@@ -84,8 +84,8 @@ class ResponseCache {
 class RateLimiter {
     constructor() {
         // Jikan limits: 3 req/sec, 60 req/min
-        // We use a safe dispatch interval of 350ms (≈2.85 req/sec)
-        this.MIN_INTERVAL_MS = 350;
+        // 500ms spacing = 2 req/sec — safely under the burst threshold
+        this.MIN_INTERVAL_MS = 500;
         this._queue = [];
         this._processing = false;
         this._lastRequestTime = 0;
