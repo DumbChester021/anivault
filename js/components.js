@@ -503,7 +503,7 @@ export function createEpisodeItem(ep, isActive, onClick) {
  * HLS initialization is done by the caller using HLS.js.
  * @param {Array<{url: string, isM3U8: boolean}>} sources
  */
-export function createVideoPlayer(sources) {
+export function createVideoPlayer(sources, subtitles = [], isSub = true) {
     const m3u8 = sources.find(s => s.isM3U8);
     const mp4 = sources.find(s => !s.isM3U8);
     const src = m3u8?.url || mp4?.url || '';
@@ -513,12 +513,43 @@ export function createVideoPlayer(sources) {
         controls: true,
         autoplay: true,
         id: 'animePlayer',
+        crossOrigin: 'anonymous',
     });
 
     if (m3u8) {
         video.dataset.hlsSrc = m3u8.url;
     } else {
         video.src = src;
+    }
+
+    // Add subtitle tracks
+    for (const sub of subtitles) {
+        if (!sub?.url || sub?.lang?.toLowerCase() === 'thumbnails') continue;
+        
+        // Route subtitles through proxy to fix potential CORS 403 blocks
+        const proxyUrl = `http://localhost:3001/utils/cors?url=${encodeURIComponent(sub.url)}`;
+        
+        const isEnglish = sub.lang?.toLowerCase() === 'english';
+        const shouldBeDefault = isSub && isEnglish;
+        
+        const trackEl = el('track', {
+            kind: 'captions',
+            label: sub.lang || 'English',
+            srclang: sub.lang?.substring(0, 2).toLowerCase() || 'en',
+            src: proxyUrl,
+            default: shouldBeDefault ? true : undefined
+        });
+        
+        video.appendChild(trackEl);
+        
+        if (shouldBeDefault) {
+            // Force browser to enable the dynamically added text track
+            setTimeout(() => {
+                if (trackEl.track) {
+                    trackEl.track.mode = 'showing';
+                }
+            }, 0);
+        }
     }
 
     return video;

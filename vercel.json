@@ -1,11 +1,7 @@
 {
     "rewrites": [
         {
-            "source": "/api/consumet/:path*",
-            "destination": "https://api-consumet-org-1.vercel.app/:path*"
-        },
-        {
-            "source": "/(.*)",
+            "source": "/((?!api/).*)",
             "destination": "/index.html"
         }
     ],

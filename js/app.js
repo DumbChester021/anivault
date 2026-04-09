@@ -904,18 +904,21 @@ async function renderPlayer() {
         }
 
         container.innerHTML = '';
-        const video = createVideoPlayer(sources);
+        const subtitles = data.subtitles || [];
+        const video = createVideoPlayer(sources, subtitles, !isDub);
         container.appendChild(video);
 
         // Initialize HLS.js for m3u8 sources
         if (video.dataset.hlsSrc) {
+            // Proxy the m3u8 through the backend to bypass strict Origin 403s on Cloudflare
+            const proxyUrl = `http://localhost:3001/utils/cors?url=${encodeURIComponent(video.dataset.hlsSrc)}`;
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                 const hls = new Hls();
-                hls.loadSource(video.dataset.hlsSrc);
+                hls.loadSource(proxyUrl);
                 hls.attachMedia(video);
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 // Native HLS (Safari)
-                video.src = video.dataset.hlsSrc;
+                video.src = proxyUrl;
             }
         }
 
