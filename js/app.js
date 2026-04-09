@@ -125,13 +125,12 @@ async function loadHomePage() {
     const onCardClick = (anime) => showAnimeDetail(anime.mal_id);
 
     try {
-        // Load all sections with staggered requests to respect rate limits
-        const [trending, topRated, completed, upcoming] = await Promise.all([
-            api.getTopAnime('airing'),
-            api.getTopAnime(),
-            api.searchAnime({ status: 'complete', order_by: 'end_date', sort: 'desc', limit: 15 }),
-            api.getSeasonUpcoming(),
-        ]);
+        // Sequential requests — each one flows through the 350ms rate-limiter
+        // queue so we never burst Jikan's 3 req/sec limit simultaneously.
+        const trending  = await api.getTopAnime('airing');
+        const topRated  = await api.getTopAnime();
+        const completed = await api.searchAnime({ status: 'complete', order_by: 'end_date', sort: 'desc', limit: 15 });
+        const upcoming  = await api.getSeasonUpcoming();
 
         container.innerHTML = '';
 

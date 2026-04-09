@@ -8,8 +8,9 @@
 // Jikan API (MyAnimeList unofficial API)
 export const JIKAN_API_BASE = 'https://api.jikan.moe/v4';
 
-// Consumet API — self-hosted instance
-export const CONSUMET_API_BASE = 'https://api-consumet-org-1.vercel.app';
+// Consumet API — routed through our Vercel serverless proxy to avoid CORS.
+// The proxy at /api/consumet/[...path].js forwards requests to the upstream.
+export const CONSUMET_API_BASE = '/api/consumet';
 
 // NSFW genre IDs to filter out in SFW mode (Hentai, Erotica)
 export const NSFW_GENRE_IDS = [12, 49];
