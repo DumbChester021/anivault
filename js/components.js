@@ -4,6 +4,8 @@
  */
 
 import { el, formatScore, formatNumber, truncate, formatDate, escapeHtml, $, $$ } from './utils.js';
+import { favorites, favoritesCache } from './db.js';
+import { CONSUMET_API_BASE } from './config.js';
 
 // ─── Anime Card ──────────────────────────────────────────────────────
 
@@ -41,6 +43,29 @@ export function createAnimeCard(anime, onClick, index = 0) {
         this.parentNode.appendChild(fallback);
     };
 
+    const isFav = favoritesCache.has(anime.mal_id);
+    const favBtn = el('button', {
+        className: `anime-card__fav${isFav ? ' anime-card__fav--active' : ''}`,
+        title: isFav ? 'Remove from favorites' : 'Add to favorites',
+        dataset: { malId: String(anime.mal_id) },
+    }, isFav ? '♥' : '♡');
+
+    favBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (favoritesCache.has(anime.mal_id)) {
+            await favorites.remove(anime.mal_id);
+            favBtn.classList.remove('anime-card__fav--active');
+            favBtn.title = 'Add to favorites';
+            favBtn.textContent = '♡';
+        } else {
+            await favorites.add(anime);
+            favBtn.classList.add('anime-card__fav--active');
+            favBtn.title = 'Remove from favorites';
+            favBtn.textContent = '♥';
+        }
+        document.dispatchEvent(new CustomEvent('favoritesUpdated'));
+    });
+
     const card = el('div', { className: 'anime-card', style: `--i:${index}`, dataset: { malId: anime.mal_id } },
         el('div', { className: 'anime-card__image-wrap' },
             imgEl,
@@ -50,6 +75,7 @@ export function createAnimeCard(anime, onClick, index = 0) {
             type
                 ? el('span', { className: 'anime-card__type' }, type)
                 : null,
+            favBtn,
         ),
         el('div', { className: 'anime-card__body' },
             el('h3', { className: 'anime-card__title', title }, title),
@@ -283,7 +309,10 @@ export function openDetailModal(anime, recommendations = []) {
                     titleJp ? el('p', { className: 'modal__title-jp' }, titleJp) : null,
                     statsRow,
                     genreTags,
-                    createWatchButton(anime),
+                    el('div', { className: 'modal__actions' },
+                        createWatchButton(anime),
+                        createModalFavButton(anime),
+                    ),
                 ),
             ),
             el('div', { className: 'modal__body' },
@@ -373,6 +402,34 @@ function createStatBadge(label, value) {
         el('span', { className: 'stat-badge__value' }, value),
         el('span', { className: 'stat-badge__label' }, label),
     );
+}
+
+function createModalFavButton(anime) {
+    const isFav = favoritesCache.has(anime.mal_id);
+    const btn = el('button', {
+        className: `btn btn--outline modal__fav-btn${isFav ? ' modal__fav-btn--active' : ''}`,
+    }, isFav ? '♥ Favorited' : '♡ Favorite');
+
+    btn.addEventListener('click', async () => {
+        if (favoritesCache.has(anime.mal_id)) {
+            await favorites.remove(anime.mal_id);
+            btn.className = 'btn btn--outline modal__fav-btn';
+            btn.textContent = '♡ Favorite';
+        } else {
+            await favorites.add(anime);
+            btn.className = 'btn btn--outline modal__fav-btn modal__fav-btn--active';
+            btn.textContent = '♥ Favorited';
+        }
+        // Sync visible card fav buttons
+        document.querySelectorAll(`.anime-card__fav[data-mal-id="${anime.mal_id}"]`).forEach(b => {
+            const nowFav = favoritesCache.has(anime.mal_id);
+            b.classList.toggle('anime-card__fav--active', nowFav);
+            b.textContent = nowFav ? '♥' : '♡';
+        });
+        document.dispatchEvent(new CustomEvent('favoritesUpdated'));
+    });
+
+    return btn;
 }
 
 export function closeDetailModal() {
@@ -512,9 +569,13 @@ export function createVideoPlayer(sources, subtitles = [], isSub = true) {
         className: 'player-video',
         controls: true,
         autoplay: true,
+        playsinline: true,
         id: 'animePlayer',
         crossOrigin: 'anonymous',
+        controlsList: 'nofullscreen',
     });
+
+    // Player settings (volume, captions, speed) are handled automatically by Plyr storage settings in app.js
 
     if (m3u8) {
         video.dataset.hlsSrc = m3u8.url;
@@ -527,7 +588,7 @@ export function createVideoPlayer(sources, subtitles = [], isSub = true) {
         if (!sub?.url || sub?.lang?.toLowerCase() === 'thumbnails') continue;
         
         // Route subtitles through proxy to fix potential CORS 403 blocks
-        const proxyUrl = `http://localhost:3001/utils/cors?url=${encodeURIComponent(sub.url)}`;
+        const proxyUrl = `${CONSUMET_API_BASE}/utils/cors?url=${encodeURIComponent(sub.url)}`;
         
         const isEnglish = sub.lang?.toLowerCase() === 'english';
         const shouldBeDefault = isSub && isEnglish;
@@ -575,5 +636,131 @@ export function createWatchButton(anime) {
             document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title } }));
         },
     }, '▶ Watch');
+}
+
+/**
+ * Create a history card for the Vault.
+ */
+export function createHistoryCard(entry, onClick, index = 0, isFav = false, onFavClick = null) {
+    const title = entry.anime_title || '';
+    const img = entry.anime_image || '';
+    
+    const progressPerc = entry.duration ? Math.min(100, Math.max(0, (entry.time / entry.duration) * 100)) : 0;
+    const progressLeft = Math.floor((entry.duration - entry.time) / 60);
+
+    const favBtn = el('button', {
+        className: `anime-card__fav${isFav ? ' anime-card__fav--active' : ''}`,
+        title: isFav ? 'Remove from favorites' : 'Add to favorites',
+    }, isFav ? '♥' : '♡');
+
+    favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (onFavClick) onFavClick(favBtn, isFav, entry);
+    });
+
+    const card = el('div', { className: 'anime-card', style: `--i:${index}` },
+        el('div', { className: 'anime-card__image-wrap' },
+            el('img', { className: 'anime-card__image', src: img, alt: title, loading: 'lazy' }),
+            el('div', { style: 'position:absolute;bottom:0;left:0;right:0;height:4px;background:rgba(0,0,0,0.5);z-index:10;' },
+                el('div', { style: `width:${progressPerc}%;height:100%;background:var(--accent);` })
+            ),
+            entry.is_dub ? el('span', { className: 'anime-card__type' }, 'DUB') : null,
+            favBtn
+        ),
+        el('div', { className: 'anime-card__body' },
+            el('h3', { className: 'anime-card__title', title }, title),
+            el('div', { className: 'anime-card__meta' },
+                el('span', { className: 'text-accent' }, `Ep ${entry.episode_number}`),
+                progressLeft > 1 ? el('span', {}, `${progressLeft}m left`) : el('span', {}, 'Watched')
+            )
+        )
+    );
+    card.addEventListener('click', () => onClick?.(entry));
+    return card;
+}
+
+/**
+ * Create episode details section for the watch page.
+ */
+export function createWatchDetails(anime, ep, epDetails = null) {
+    const title = ep ? `Episode ${ep.number}${ep.title ? `: ${ep.title}` : ''}` : anime.title;
+    
+    // Use real data, NO dummy data
+    const members = typeof anime.members === 'number' ? formatNumber(anime.members) : 'N/A';
+    
+    const aired = epDetails?.aired || anime.aired?.from;
+    const date = aired ? new Date(aired).toLocaleDateString() : 'Unknown date';
+
+    const desc = epDetails?.synopsis || anime.synopsis || 'No synopsis available for this episode.';
+
+    return el('div', {},
+        el('h1', { className: 'watch-details__title' }, `${anime.title} — ${title}`),
+        el('div', { className: 'watch-details__meta' },
+            el('div', { className: 'watch-details__views', title: 'Members' }, el('span', {}, '👥'), el('span', {}, `${members} Members`)),
+            anime.score ? el('div', { className: 'watch-details__views', title: 'Score' }, el('span', {}, '⭐'), el('span', {}, `${anime.score}`)) : null,
+            el('div', { className: 'watch-details__date' }, el('span', {}, '📅'), el('span', {}, date))
+        ),
+        el('div', { className: 'watch-details__desc' }, desc)
+    );
+}
+
+/**
+ * Create a comments (reviews) section for the watch page.
+ */
+export function createWatchComments(reviews = []) {
+    const commentsContainer = el('div', {});
+
+    commentsContainer.appendChild(
+        el('div', { className: 'watch-comments__header' }, 
+            el('span', {}, 'Comments'),
+            el('span', { className: 'watch-comments__count' }, (reviews.length || 0).toString())
+        )
+    );
+
+    commentsContainer.appendChild(
+        el('div', { className: 'comment-input-area' },
+            el('div', { className: 'comment-input-area__avatar' }, 'U'),
+            el('input', { 
+                className: 'comment-input-area__field', 
+                type: 'text', 
+                placeholder: 'Add a comment...' 
+            })
+        )
+    );
+
+    const list = el('div', { className: 'comment-list' });
+
+    if (!reviews || reviews.length === 0) {
+        list.appendChild(el('p', { style: 'color: var(--text-muted); font-size: 0.9rem;' }, 'No comments found.'));
+    } else {
+        for (const review of reviews) {
+            const name = review.user?.username || 'Anonymous';
+            const avatar = review.user?.images?.jpg?.image_url;
+            const text = review.review || '';
+            const dateStr = review.date ? new Date(review.date).toLocaleDateString() : 'Unknown date';
+            const score = review.score || 0;
+            
+            list.appendChild(
+                el('div', { className: 'comment-item' },
+                    avatar 
+                        ? el('img', { className: 'comment-item__avatar', style: 'object-fit: cover;', src: avatar })
+                        : el('div', { className: 'comment-item__avatar' }, name.charAt(0)),
+                    el('div', { className: 'comment-item__content' },
+                        el('div', { className: 'comment-item__header' },
+                            el('span', { className: 'comment-item__author' }, `@${name}`),
+                            el('span', { className: 'comment-item__time' }, dateStr)
+                        ),
+                        el('div', { className: 'comment-item__text' }, truncate(text, 300)),
+                        el('div', { className: 'comment-item__actions' },
+                            el('button', { className: 'comment-item__btn', title: 'Score' }, '★', el('span', {}, score.toString()))
+                        )
+                    )
+                )
+            );
+        }
+    }
+
+    commentsContainer.appendChild(list);
+    return commentsContainer;
 }
 

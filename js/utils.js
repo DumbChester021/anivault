@@ -12,10 +12,12 @@ export const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 export function el(tag, attrs = {}, ...children) {
     const elem = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
+        if (v === undefined || v === null) continue;
         if (k === 'className') elem.className = v;
         else if (k === 'dataset') Object.assign(elem.dataset, v);
         else if (k.startsWith('on')) elem.addEventListener(k.slice(2).toLowerCase(), v);
-        else elem.setAttribute(k, v);
+        else if (v === false) elem.removeAttribute(k);
+        else elem.setAttribute(k, v === true ? '' : v);
     }
     for (const child of children) {
         if (typeof child === 'string') elem.appendChild(document.createTextNode(child));

@@ -1559,6 +1559,44 @@ img {
     overflow: hidden;
     border: 1px solid var(--border-glass);
     box-shadow: var(--shadow-lg);
+    flex-shrink: 0;
+}
+
+/* ─── Plyr Overrides ──────────────────────────────────────────────────── */
+.plyr {
+    --plyr-color-main: var(--accent);
+    --plyr-video-control-background-hover: var(--accent);
+    --plyr-control-icon-size: 20px;
+    height: 100%;
+}
+
+
+.skip-btn {
+    position: absolute;
+    bottom: 80px;
+    right: 20px;
+    z-index: 50;
+    padding: 10px 24px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: var(--font);
+    background: rgba(17, 24, 39, 0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.skip-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+    color: var(--accent);
+    transform: scale(1.05);
 }
 
 /* ─── Episode Navigation ──────────────────────────────────────────── */
@@ -1621,6 +1659,181 @@ img {
 .player-placeholder p {
     font-size: 0.95rem;
     max-width: 300px;
+}
+
+/* ─── Watch Details Area ──────────────────────────────────────────── */
+.watch-details-area {
+    margin-top: 24px;
+    padding: 0 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.watch-details {
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.watch-details__title {
+    font-size: 1.4rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.watch-details__meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+.watch-details__views, .watch-details__date {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.watch-details__desc {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    padding: 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-glass);
+}
+
+/* ─── Watch Comments ──────────────────────────────────────────────── */
+.watch-comments__header {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.watch-comments__count {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.comment-input-area {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.comment-input-area__avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--gradient-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.comment-input-area__field {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border-glass);
+    color: var(--text-primary);
+    font-family: var(--font);
+    font-size: 0.95rem;
+    padding: 8px 0;
+    transition: all var(--duration) var(--ease);
+}
+
+.comment-input-area__field:focus {
+    outline: none;
+    border-bottom-color: var(--accent);
+}
+
+.comment-list {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.comment-item {
+    display: flex;
+    gap: 16px;
+}
+
+.comment-item__avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--bg-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    border: 1px solid var(--border-glass);
+}
+
+.comment-item__content {
+    flex: 1;
+}
+
+.comment-item__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.comment-item__author {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.comment-item__time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.comment-item__text {
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.comment-item__actions {
+    display: flex;
+    gap: 16px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.comment-item__btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font);
+    transition: color 0.2s ease;
+}
+
+.comment-item__btn:hover {
+    color: var(--text-primary);
 }
 
 /* ─── Watch Search Results ────────────────────────────────────────── */
@@ -2052,4 +2265,58 @@ body::before {
         opacity: 0;
         transform: translateX(40px);
     }
+}
+
+/* ─── Favorite Button (card overlay) ─────────────────────────────── */
+.anime-card__fav {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    border: none;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text-secondary);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: background 0.2s var(--ease), transform 0.15s var(--ease), color 0.2s;
+    z-index: 2;
+    padding: 0;
+    opacity: 0;
+}
+
+.anime-card:hover .anime-card__fav,
+.anime-card__fav--active {
+    opacity: 1;
+}
+
+.anime-card__fav:hover {
+    background: rgba(0, 0, 0, 0.85);
+    transform: scale(1.15);
+}
+
+.anime-card__fav--active {
+    color: #f87171;
+}
+
+/* ─── Favorite Button (detail modal) ─────────────────────────────── */
+.modal__actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    align-items: center;
+}
+
+.modal__fav-btn--active {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.6);
+    background: rgba(248, 113, 113, 0.08);
 }

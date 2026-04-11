@@ -288,6 +288,20 @@ export function getAnimeRecommendations(id) {
 }
 
 /**
+ * Get anime reviews.
+ */
+export function getAnimeReviews(id) {
+    return jikanGet(`/anime/${id}/reviews`, {}, { cacheTTL: 30 * 60 * 1000 });
+}
+
+/**
+ * Get anime episode details by MAL ID and episode number.
+ */
+export function getAnimeEpisode(id, epNum) {
+    return jikanGet(`/anime/${id}/episodes/${epNum}`, {}, { cacheTTL: 24 * 60 * 60 * 1000 });
+}
+
+/**
  * Get all anime genres. Cached permanently after first fetch.
  */
 export async function getGenres() {

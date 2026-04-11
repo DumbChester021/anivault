@@ -13,7 +13,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css">
+  <link rel="stylesheet" href="/css/style.css">
 </head>
 
 <body>
@@ -30,6 +31,7 @@
         <a href="#" class="nav__link active" data-nav="home">Home</a>
         <a href="#" class="nav__link" data-nav="search">Search</a>
         <a href="#" class="nav__link" data-nav="watch">Watch</a>
+        <a href="#" class="nav__link" data-nav="vault">Vault</a>
       </div>
 
       <button class="nav__menu-btn" id="menuToggle" aria-label="Toggle menu">
@@ -48,6 +50,7 @@
 
   <!-- ─── Home Page ──────────────────────────────────────────────── -->
   <main class="page page--active" id="page-home">
+    <div id="homeFavorites"></div>
     <div id="homeContent" class="page__content"></div>
   </main>
 
@@ -240,8 +243,26 @@
             <p>Search for an anime and select an episode to start watching</p>
           </div>
         </div>
+
+        <!-- Episode Details & Comments -->
+        <div class="watch-details-area" id="watchDetailsArea" style="display:none">
+          <div class="watch-details" id="watchDetails"></div>
+          <div class="watch-comments" id="watchComments"></div>
+        </div>
       </div>
 
+    </div>
+  </main>
+
+  <!-- ─── Vault Page ──────────────────────────────────────────────── -->
+  <main class="page" id="page-vault">
+    <div class="page__content">
+      <div class="vault-section" id="vaultHistory">
+        <!-- History cards will render here -->
+      </div>
+      <div class="vault-section" id="vaultFavorites">
+        <!-- Favorites will render here -->
+      </div>
     </div>
   </main>
 
@@ -256,8 +277,9 @@
     </div>
   </footer>
 
+  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 
 </html>
