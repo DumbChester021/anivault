@@ -7,6 +7,15 @@ import { el, formatScore, formatNumber, truncate, formatDate, escapeHtml, $, $$ 
 import { favorites, favoritesCache } from './db.js';
 import { CONSUMET_API_BASE } from './config.js';
 
+function formatStatusLabel(st) {
+    if (!st) return '';
+    const l = st.toLowerCase();
+    if (l === 'finished airing') return 'Completed';
+    if (l === 'currently airing') return 'Ongoing';
+    if (l === 'not yet aired') return 'Upcoming';
+    return st;
+}
+
 // ─── Anime Card ──────────────────────────────────────────────────────
 
 /**
@@ -20,7 +29,7 @@ export function createAnimeCard(anime, onClick, index = 0) {
     const score = formatScore(anime.score);
     const episodes = anime.episodes ? `${anime.episodes} eps` : '';
     const type = anime.type || '';
-    const status = anime.status || '';
+    const status = formatStatusLabel(anime.status);
 
     // Season info for TV series (e.g. "Winter 2024")
     let seasonText = '';
@@ -234,7 +243,7 @@ export function openDetailModal(anime, recommendations = []) {
     const infoRows = [
         ['Type', anime.type],
         ['Episodes', anime.episodes ?? '—'],
-        ['Status', anime.status],
+        ['Status', formatStatusLabel(anime.status)],
         ['Aired', anime.aired?.string || '—'],
         ['Rating', anime.rating],
         ['Source', anime.source],
@@ -544,12 +553,22 @@ export function createWatchAnimeHeader(anime) {
 /**
  * Create an episode list item.
  */
-export function createEpisodeItem(ep, isActive, onClick) {
+export function createEpisodeItem(ep, isActive, onClick, onDownload) {
     const classes = `episode-item${isActive ? ' episode-item--active' : ''}${ep.isFiller ? ' episode-item--filler' : ''}`;
+    const dlBtn = el('button', {
+        className: 'episode-item__dl-btn',
+        title: `Download ep ${ep.number}`,
+        'aria-label': `Download episode ${ep.number}`,
+    }, '⬇');
+    dlBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onDownload?.(ep, dlBtn);
+    });
     const item = el('div', { className: classes, dataset: { epId: ep.id } },
         el('span', { className: 'episode-item__number' }, `${ep.number}`),
         el('span', { className: 'episode-item__title' }, ep.title || `Episode ${ep.number}`),
         ep.isFiller ? el('span', { className: 'episode-item__filler-tag' }, 'Filler') : null,
+        dlBtn,
     );
     item.addEventListener('click', () => onClick?.(ep));
     return item;
@@ -630,10 +649,11 @@ export function createWatchButton(anime) {
     if (anime.episodes === 0) return null;
 
     const title = anime.title_english || anime.title || '';
+    const titleRomaji = anime.title || '';
     return el('button', {
         className: 'btn btn--primary watch-btn',
         onClick: () => {
-            document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title } }));
+            document.dispatchEvent(new CustomEvent('navigateToWatch', { detail: { title, titleRomaji } }));
         },
     }, '▶ Watch');
 }
@@ -648,6 +668,17 @@ export function createHistoryCard(entry, onClick, index = 0, isFav = false, onFa
     const progressPerc = entry.duration ? Math.min(100, Math.max(0, (entry.time / entry.duration) * 100)) : 0;
     const progressLeft = Math.floor((entry.duration - entry.time) / 60);
 
+    const score = entry.score ? formatScore(entry.score) : '';
+    const type = entry.type || '';
+    const status = formatStatusLabel(entry.status);
+    
+    let seasonText = '';
+    if (entry.season && entry.year) {
+        seasonText = `${entry.season.charAt(0).toUpperCase() + entry.season.slice(1)} ${entry.year}`;
+    } else if (entry.year) {
+        seasonText = `${entry.year}`;
+    }
+
     const favBtn = el('button', {
         className: `anime-card__fav${isFav ? ' anime-card__fav--active' : ''}`,
         title: isFav ? 'Remove from favorites' : 'Add to favorites',
@@ -658,20 +689,31 @@ export function createHistoryCard(entry, onClick, index = 0, isFav = false, onFa
         if (onFavClick) onFavClick(favBtn, isFav, entry);
     });
 
+    const typeBadges = [];
+    if (type) typeBadges.push(el('span', { className: 'anime-card__type', style: 'position:relative; bottom:0; left:0;' }, type));
+    if (entry.is_dub) typeBadges.push(el('span', { className: 'anime-card__type', style: 'position:relative; bottom:0; left:0; background:var(--accent); color:white;' }, 'DUB'));
+
+    const badgesContainer = typeBadges.length > 0 
+        ? el('div', { style: 'position:absolute; bottom:12px; left:8px; display:flex; gap:4px; z-index:5;' }, ...typeBadges) 
+        : null;
+
     const card = el('div', { className: 'anime-card', style: `--i:${index}` },
         el('div', { className: 'anime-card__image-wrap' },
             el('img', { className: 'anime-card__image', src: img, alt: title, loading: 'lazy' }),
             el('div', { style: 'position:absolute;bottom:0;left:0;right:0;height:4px;background:rgba(0,0,0,0.5);z-index:10;' },
                 el('div', { style: `width:${progressPerc}%;height:100%;background:var(--accent);` })
             ),
-            entry.is_dub ? el('span', { className: 'anime-card__type' }, 'DUB') : null,
+            score && score !== 'N/A' ? el('span', { className: 'anime-card__score' }, `★ ${score}`) : null,
+            badgesContainer,
             favBtn
         ),
         el('div', { className: 'anime-card__body' },
             el('h3', { className: 'anime-card__title', title }, title),
             el('div', { className: 'anime-card__meta' },
                 el('span', { className: 'text-accent' }, `Ep ${entry.episode_number}`),
-                progressLeft > 1 ? el('span', {}, `${progressLeft}m left`) : el('span', {}, 'Watched')
+                progressLeft > 1 ? el('span', {}, `${progressLeft}m left`) : el('span', {}, 'Watched'),
+                seasonText ? el('span', { className: 'anime-card__season' }, seasonText) : null,
+                status ? el('span', { className: `anime-card__status anime-card__status--${status.toLowerCase().replace(/\s+/g, '')}` }, status) : null
             )
         )
     );

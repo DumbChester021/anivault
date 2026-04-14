@@ -7,6 +7,8 @@ import * as api from './api.js';
 import * as streaming from './streaming.js';
 import * as db from './db.js';
 import { CONSUMET_API_BASE } from './config.js';
+import * as downloader from './downloader.js';
+import { checkFavoritesForUpdates, getOngoingBroadcasts, nextEpisodeMs, formatCountdown } from './updates.js';
 import {
     createCarousel, createCarouselSkeleton, createHeroBanner,
     createAnimeCard, showSkeletons, createResultsGrid,
@@ -41,6 +43,7 @@ const state = {
     genresList: [],
     watch: {
         searchQuery: '',
+        searchQueryAlt: '', // Jikan romaji title — fallback for season extraction
         selectedAnime: null, // { id, title, image, subOrDub, ... } from AnimeKai
         episodes: [],
         currentEpId: null,
@@ -49,6 +52,41 @@ const state = {
         resumeTime: 0,
     },
 };
+
+// ─── Countdown timer ─────────────────────────────────────────────────
+let _countdownTimer = null;
+
+function stopCountdownTimer() {
+    if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+}
+
+function startCountdownTimer() {
+    stopCountdownTimer();
+    _countdownTimer = setInterval(() => {
+        document.querySelectorAll('.anime-card__countdown').forEach(node => {
+            const ms = parseInt(node.dataset.nextMs);
+            if (isNaN(ms)) return;
+            const text = formatCountdown(ms);
+            if (text) { node.textContent = text; }
+            else { node.remove(); }
+        });
+    }, 60000);
+}
+
+function applyCountdownToCard(container, malId, broadcast) {
+    const card = container.querySelector(`[data-mal-id="${malId}"]`);
+    if (!card) return;
+    card.querySelector('.anime-card__countdown')?.remove();
+    const nextMs = nextEpisodeMs(broadcast);
+    if (!nextMs) return;
+    const text = formatCountdown(nextMs);
+    if (!text) return;
+    const body = card.querySelector('.anime-card__body');
+    if (!body) return;
+    const badge = el('div', { className: 'anime-card__countdown', dataset: { nextMs: String(nextMs) } });
+    badge.textContent = text;
+    body.appendChild(badge);
+}
 
 // ─── Init ────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -163,6 +201,7 @@ function navigateTo(page, { pushState = true } = {}) {
 
     // Stop video playback when navigating away from the watch page
     if (previousPage === 'watch' && page !== 'watch') {
+        flushHistorySave?.();
         const video = document.getElementById('animePlayer');
         if (video) video.pause();
     }
@@ -180,6 +219,8 @@ function navigateTo(page, { pushState = true } = {}) {
     if (navLinks) navLinks.classList.remove('nav__links--open');
     const menuBtn = $('#menuToggle');
     if (menuBtn) menuBtn.classList.remove('active');
+
+    stopCountdownTimer();
 
     // Load page content
     if (page === 'home') loadHomePage();
@@ -257,10 +298,36 @@ async function loadHomePage() {
 async function loadFavoritesSection(container) {
     const favs = await db.favorites.getAll();
     container.innerHTML = '';
-    if (favs.length > 0) {
-        const onCardClick = (anime) => showAnimeDetail(anime.mal_id);
-        container.appendChild(createCarousel('❤ My Favorites', favs, onCardClick));
+    if (favs.length === 0) return;
+
+    const onCardClick = (anime) => showAnimeDetail(anime.mal_id);
+    container.appendChild(createCarousel('❤ My Favorites', favs, onCardClick));
+
+    // Apply any cached countdowns immediately (sync read from localStorage)
+    const broadcasts = getOngoingBroadcasts();
+    for (const fav of favs) {
+        if (broadcasts[fav.mal_id]) applyCountdownToCard(container, fav.mal_id, broadcasts[fav.mal_id]);
     }
+    startCountdownTimer();
+
+    // Background update checks — non-blocking, never throws
+    checkFavoritesForUpdates(favs, (malId, update, broadcast) => {
+        // Update badge
+        if (update) {
+            const card = container.querySelector(`[data-mal-id="${malId}"]`);
+            if (card) {
+                card.querySelector('.update-badge')?.remove();
+                const wrap = card.querySelector('.anime-card__image-wrap');
+                if (wrap) {
+                    const badge = el('div', { className: `update-badge update-badge--${update.type}` });
+                    badge.textContent = update.type === 'new_episodes' ? `+${update.delta} EP` : 'NEW S.';
+                    wrap.appendChild(badge);
+                }
+            }
+        }
+        // Countdown (fresh broadcast data from this check)
+        if (broadcast) applyCountdownToCard(container, malId, broadcast);
+    });
 }
 
 function setupFavoritesListener() {
@@ -737,12 +804,31 @@ function setupCustomDetailEvent() {
 
 // ─── Watch Page ──────────────────────────────────────────────────────
 let watchInitialized = false;
+let flushHistorySave = null;
+
+// Extract season number from a title/id string.
+// Handles: "Season 4", "4th Season", "S4", trailing digit, slug "4th-season", Roman numerals (IV)
+const ROMAN_NUMERALS = { i:1, ii:2, iii:3, iv:4, v:5, vi:6, vii:7, viii:8, ix:9, x:10, xi:11, xii:12 };
+function extractSeason(s) {
+    if (!s) return null;
+    let m;
+    if ((m = s.match(/(\d+)(?:st|nd|rd|th)\s*[-\s]*season/i))) return parseInt(m[1]);
+    if ((m = s.match(/season[-\s]*(\d+)/i))) return parseInt(m[1]);
+    if ((m = s.match(/\bs(\d+)\b/i))) return parseInt(m[1]);
+    if ((m = s.match(/\b(\d+)\s*$/))) return parseInt(m[1]);
+    // Roman numerals at end of string or before subtitle separator (:, —, -)
+    if ((m = s.match(/\b(IV|IX|VI{0,3}|XI{0,2}|I{1,3}|V|X)\s*(?:[:\u2014\u2013-].*)?$/i))) {
+        const n = ROMAN_NUMERALS[m[1].toLowerCase()];
+        if (n) return n;
+    }
+    return null;
+}
 
 function setupWatchEvents() {
     // Navigate to watch from detail modal
     document.addEventListener('navigateToWatch', (e) => {
         const title = e.detail?.title;
-        
+
         const isSameAnime = state.watch.selectedAnime && title && (
             state.watch.selectedAnime.title === title || state.watch.searchQuery === title
         );
@@ -755,6 +841,7 @@ function setupWatchEvents() {
 
         closeDetailModal();
         state.watch.searchQuery = title || '';
+        state.watch.searchQueryAlt = e.detail?.titleRomaji || '';
         state.watch.selectedAnime = null;
         state.watch.episodes = [];
         state.watch.currentEpId = null;
@@ -865,8 +952,9 @@ async function loadWatchPage() {
     const searchInput = $('#watchSearchInput');
     if (state.watch.searchQuery && searchInput) {
         searchInput.value = state.watch.searchQuery;
-        await performWatchSearch(state.watch.searchQuery, true);
-        state.watch.searchQuery = ''; // Clear after use
+        await performWatchSearch(state.watch.searchQuery, true, state.watch.searchQueryAlt);
+        state.watch.searchQuery = '';
+        state.watch.searchQueryAlt = '';
     }
 }
 
@@ -916,9 +1004,24 @@ function initWatchControls() {
             sidebar.classList.toggle('watch-sidebar--open');
         });
     }
+
+    // Download current episode
+    const dlCurrentBtn = $('#dlCurrentBtn');
+    if (dlCurrentBtn) dlCurrentBtn.addEventListener('click', downloadCurrentEpisode);
+
+    // Download series / open batch modal
+    const dlSeriesBtn = $('#dlSeriesBtn');
+    if (dlSeriesBtn) {
+        dlSeriesBtn.addEventListener('click', () => {
+            const count = state.watch.episodes.length;
+            if (!count) return;
+            if (count <= 24) startSeriesDownload([...state.watch.episodes]);
+            else openBatchDownloadModal();
+        });
+    }
 }
 
-async function performWatchSearch(query, autoSelect = false) {
+async function performWatchSearch(query, autoSelect = false, altQuery = '') {
     const resultsContainer = $('#watchSearchResults');
     const animeInfo = $('#watchAnimeInfo');
     if (!resultsContainer) return;
@@ -928,7 +1031,19 @@ async function performWatchSearch(query, autoSelect = false) {
     resultsContainer.innerHTML = '<p class="loading-text">Searching...</p>';
 
     try {
-        const data = await streaming.searchAnimekai(query);
+        // Strip subtitle and season indicators to get a broad base title for AnimeKai search.
+        // Use whichever of query/altQuery contains season info, so we strip the right thing.
+        // Keep the original query (and altQuery) for findBestMatch season discrimination.
+        const stripSeason = (s) => s
+            .replace(/[:：].*/g, '')
+            .replace(/\s*\d+(?:st|nd|rd|th)?\s*season/gi, '')
+            .replace(/\s*season\s*\d+/gi, '')
+            .replace(/\s+\b(IV|IX|VI{0,3}|XI{0,2}|I{1,3}|V|X)\b\s*$/i, '')
+            .trim();
+        const sourceForBase = (altQuery && extractSeason(altQuery) != null && extractSeason(query) == null)
+            ? altQuery : query;
+        const baseQuery = autoSelect ? (stripSeason(sourceForBase) || query) : query;
+        const data = await streaming.searchAnimekai(baseQuery);
         resultsContainer.innerHTML = '';
 
         if (!data.results || data.results.length === 0) {
@@ -938,7 +1053,7 @@ async function performWatchSearch(query, autoSelect = false) {
 
         // Auto-select: find best match and skip the search results UI
         if (autoSelect) {
-            const bestMatch = findBestMatch(query, data.results);
+            const bestMatch = findBestMatch(query, data.results, altQuery);
             if (bestMatch) {
                 await selectWatchAnime(bestMatch, true);
                 return;
@@ -962,28 +1077,54 @@ async function performWatchSearch(query, autoSelect = false) {
  * Find the best matching anime from AnimeKai results given a Jikan title.
  * Uses normalized string matching.
  */
-function findBestMatch(query, animes) {
+function findBestMatch(query, animes, altQuery = '') {
     const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     const q = normalize(query);
 
-    // Try exact normalized match first
+    // Exact normalized match
     for (const anime of animes) {
-        const title = normalize(anime.title || '');
-        if (title === q) return anime;
+        if (normalize(anime.title || '') === q) return anime;
     }
 
-    // Try inclusion match (query contains anime title or vice versa)
-    for (const anime of animes) {
-        const title = normalize(anime.title || '');
-        if (title && (q.includes(title) || title.includes(q))) return anime;
+    // Bigram coverage: what fraction of query's bigrams appear in target
+    // (one-sided — doesn't penalise target for having extra subtitle content)
+    const queryBigrams = (() => {
+        const set = new Set();
+        for (let i = 0; i < q.length - 1; i++) set.add(q.slice(i, i + 2));
+        return set;
+    })();
+    const coverage = (t) => {
+        if (!queryBigrams.size) return 0;
+        let hits = 0;
+        for (const g of queryBigrams) if (t.includes(g)) hits++;
+        return hits / queryBigrams.size;
+    };
+
+    // Use altQuery (romaji) as fallback if primary query has no season info
+    const querySeason = extractSeason(query) ?? extractSeason(altQuery);
+    const pool = querySeason != null
+        ? animes.filter(a =>
+            extractSeason(a.title || '') === querySeason ||
+            extractSeason(a.id || '') === querySeason
+          )
+        : [];
+
+    // Season found but no results matched it → return null so caller shows manual results
+    if (querySeason != null && pool.length === 0) return null;
+
+    const candidates = pool.length > 0 ? pool : animes;
+
+    let best = null, bestScore = -1;
+    for (const anime of candidates) {
+        const t = normalize(anime.title || '');
+        if (!t) continue;
+        const score = coverage(t);
+        if (score > bestScore) { bestScore = score; best = anime; }
     }
+    if (best) return best;
 
-    // Fall back to first result if it's a TV series (most likely correct)
-    const tvMatch = animes.find(a => a.type === 'TV');
-    if (tvMatch) return tvMatch;
-
-    // Last resort: first result
-    return animes[0];
+    // Last resort: first TV result, then first result
+    return animes.find(a => a.type === 'TV') || animes[0];
 }
 
 async function selectWatchAnime(anime, keepState = false) {
@@ -1022,6 +1163,7 @@ async function loadEpisodes(animeId) {
         state.watch.episodes = data.episodes || [];
 
         renderEpisodeList();
+        updateDownloadButtons();
 
         // Auto-play first episode if none selected yet
         if (!state.watch.currentEpId && state.watch.episodes.length > 0) {
@@ -1098,7 +1240,7 @@ function renderEpisodeList() {
 
     for (const ep of state.watch.episodes) {
         const isActive = ep.id === state.watch.currentEpId;
-        episodeList.appendChild(createEpisodeItem(ep, isActive, selectEpisode));
+        episodeList.appendChild(createEpisodeItem(ep, isActive, selectEpisode, handleEpisodeDownload));
     }
 }
 
@@ -1111,7 +1253,8 @@ function selectEpisode(ep) {
 
     updateWatchURL();
     renderEpisodeList(); // Update active state
-    updateLangToggle(); 
+    updateLangToggle();
+    updateDownloadButtons();
     renderPlayer();
 
     // Close mobile sidebar after selection
@@ -1225,25 +1368,36 @@ async function renderPlayer() {
             player.play().catch(e => console.warn('Autoplay prevented by browser:', e));
         });
 
+        function saveProgress() {
+            const ep = state.watch.episodes.find(e => e.id === state.watch.currentEpId);
+            const anime = state.watch.selectedAnime;
+            if (anime && ep && video.duration) {
+                db.history.save({
+                    id: anime.id,
+                    title: anime.title || anime.title_english,
+                    image: anime.image,
+                    score: anime.score || null,
+                    type: anime.type || null,
+                    status: anime.status || null,
+                    season: anime.season || null,
+                    year: anime.year || null,
+                    episodes: anime.episodes || null,
+                }, {
+                    id: ep.id,
+                    title: ep.title,
+                    number: ep.number
+                }, video.currentTime, video.duration, isDub);
+            }
+        }
+        flushHistorySave = saveProgress;
+
         let saveTimeout;
         video.addEventListener('timeupdate', () => {
             if (video.paused || !video.duration) return;
             if (saveTimeout) return;
             saveTimeout = setTimeout(() => {
                 saveTimeout = null;
-                const ep = state.watch.episodes.find(e => e.id === state.watch.currentEpId);
-                const anime = state.watch.selectedAnime;
-                if (anime && ep) {
-                    db.history.save({
-                        id: anime.id,
-                        title: anime.title || anime.title_english,
-                        image: anime.image
-                    }, {
-                        id: ep.id,
-                        title: ep.title,
-                        number: ep.number
-                    }, video.currentTime, video.duration, isDub);
-                }
+                saveProgress();
             }, 5000);
         });
 
@@ -1308,8 +1462,15 @@ async function renderPlayer() {
                     if (!malId && state.watch.selectedAnime.title) {
                         const searchRes = await api.searchAnime({ q: state.watch.selectedAnime.title, limit: 1 });
                         if (searchRes.data && searchRes.data.length > 0) {
-                            malId = searchRes.data[0].mal_id;
+                            const jikanData = searchRes.data[0];
+                            malId = jikanData.mal_id;
                             state.watch.selectedAnime.mal_id = malId;
+                            state.watch.selectedAnime.score = jikanData.score;
+                            state.watch.selectedAnime.type = jikanData.type;
+                            state.watch.selectedAnime.status = jikanData.status;
+                            state.watch.selectedAnime.season = jikanData.season;
+                            state.watch.selectedAnime.year = jikanData.year;
+                            state.watch.selectedAnime.episodes = jikanData.episodes;
                         }
                     }
 
@@ -1500,9 +1661,19 @@ async function loadVaultPage() {
             }
 
             for (let i = 0; i < histData.length; i++) {
-                const entry = histData[i];
+                const entry = { ...histData[i] };
                 const t = (entry.anime_title || '').toLowerCase();
                 const isFav = favTitleMap.has(t);
+
+                if (isFav && !entry.score) {
+                    const f = favTitleMap.get(t);
+                    entry.score = f.score;
+                    entry.type = f.type;
+                    entry.status = f.status;
+                    entry.season = f.season;
+                    entry.year = f.year;
+                    entry.episodes = f.episodes;
+                }
 
                 track.appendChild(createHistoryCard(entry, (entry) => {
                     document.dispatchEvent(new CustomEvent('navigateToWatchExt', { detail: { 
@@ -1550,6 +1721,13 @@ async function loadVaultPage() {
                 el('h2', { className: 'carousel__title', style: 'margin-bottom: 24px;' }, '❤ Favorites'),
                 track
             ));
+
+            // Apply countdowns to ongoing favorites from cache (no extra fetch)
+            const broadcasts = getOngoingBroadcasts();
+            for (const fav of favData) {
+                if (broadcasts[fav.mal_id]) applyCountdownToCard(favContainer, fav.mal_id, broadcasts[fav.mal_id]);
+            }
+            startCountdownTimer();
         } else if (histData.length === 0) {
             favContainer.appendChild(createEmptyState("No favorites yet. Add some anime to your favorites!"));
         }
@@ -1558,5 +1736,195 @@ async function loadVaultPage() {
         histContainer.innerHTML = '';
         favContainer.innerHTML = '';
         histContainer.appendChild(createErrorCard(`Failed to load vault: ${err.message}`, loadVaultPage));
+    }
+}
+
+
+// ─── Download ─────────────────────────────────────────────────────────────
+
+let _dlQueue = null;
+let _dlToastEl = null;
+
+function updateDownloadButtons() {
+    const dlCurrentBtn = $('#dlCurrentBtn');
+    const dlSeriesBtn = $('#dlSeriesBtn');
+    if (dlCurrentBtn) {
+        dlCurrentBtn.style.display = state.watch.currentEpId ? '' : 'none';
+    }
+    if (dlSeriesBtn) {
+        const count = state.watch.episodes.length;
+        if (!count || !state.watch.selectedAnime) {
+            dlSeriesBtn.style.display = 'none';
+        } else {
+            dlSeriesBtn.style.display = '';
+            dlSeriesBtn.textContent = count <= 24 ? '⬇ All' : '⬇ Batch';
+            dlSeriesBtn.title = count <= 24
+                ? `Download all ${count} episodes`
+                : `Download episodes in batches (${count} total)`;
+        }
+    }
+}
+
+function showDlToast(title) {
+    if (_dlToastEl) _dlToastEl.remove();
+    _dlToastEl = el('div', { className: 'dl-toast' },
+        el('div', { className: 'dl-toast__header' },
+            el('span', { className: 'dl-toast__title', id: 'dlToastTitle' }, title),
+            el('button', { className: 'dl-toast__close', 'aria-label': 'Cancel download' }, '✕'),
+        ),
+        el('div', { className: 'dl-toast__bar' },
+            el('div', { className: 'dl-toast__fill', id: 'dlToastFill' }),
+        ),
+        el('span', { className: 'dl-toast__status', id: 'dlToastStatus' }, 'Preparing…'),
+    );
+    _dlToastEl.querySelector('.dl-toast__close').addEventListener('click', () => {
+        _dlQueue?.cancel();
+        closeDlToast();
+    });
+    document.body.appendChild(_dlToastEl);
+}
+
+function updateDlToast(ep, segPct, qIdx, total) {
+    if (!_dlToastEl) return;
+    const fill = $('#dlToastFill');
+    const status = $('#dlToastStatus');
+    const overallPct = ((qIdx + segPct) / total) * 100;
+    if (fill) fill.style.width = `${overallPct.toFixed(1)}%`;
+    if (status) status.textContent = total > 1
+        ? `Ep ${ep.number} — ${Math.round(segPct * 100)}%  (${qIdx + 1}/${total})`
+        : `Ep ${ep.number} — ${Math.round(segPct * 100)}%`;
+}
+
+function closeDlToast() {
+    if (_dlToastEl) { _dlToastEl.remove(); _dlToastEl = null; }
+}
+
+function downloadCurrentEpisode() {
+    if (!state.watch.currentEpId) return;
+    const ep = state.watch.episodes.find(e => e.id === state.watch.currentEpId);
+    if (ep) startSeriesDownload([ep]);
+}
+
+function handleEpisodeDownload(ep, btn) {
+    if (btn?.disabled) return;
+    startSeriesDownload([ep]);
+}
+
+async function startSeriesDownload(episodes) {
+    if (!episodes.length) return;
+    const anime = state.watch.selectedAnime;
+    if (!anime) return;
+
+    const animeName = anime.title_english || anime.title || 'Anime';
+    const isDub = state.watch.language === 'dub';
+
+    if (_dlQueue) _dlQueue.cancel();
+    _dlQueue = new downloader.DownloadQueue();
+
+    const toastTitle = episodes.length === 1
+        ? `Downloading — ${animeName} ep ${episodes[0].number}`
+        : `Downloading ${episodes.length} eps — ${animeName}`;
+    showDlToast(toastTitle);
+
+    _dlQueue.onProgress = updateDlToast;
+    _dlQueue.onEpisodeDone = (ep, qi, total) => {
+        const status = $('#dlToastStatus');
+        if (status) status.textContent = `Ep ${ep.number} saved  (${qi + 1}/${total})`;
+    };
+    _dlQueue.onEpisodeError = (ep, err, qi, total) => {
+        console.error(`[DL] ep ${ep.number} failed:`, err);
+        const status = $('#dlToastStatus');
+        if (status) status.textContent = `Ep ${ep.number} failed — ${err.message}`;
+    };
+    _dlQueue.onComplete = () => {
+        const fill = $('#dlToastFill');
+        const status = $('#dlToastStatus');
+        if (fill) fill.style.width = '100%';
+        if (status) status.textContent = `Done! ${episodes.length} episode(s) saved.`;
+        setTimeout(closeDlToast, 4000);
+        _dlQueue = null;
+    };
+
+    await _dlQueue.run(episodes, animeName, isDub, streaming.getEpisodeSources);
+}
+
+function openBatchDownloadModal() {
+    const anime = state.watch.selectedAnime;
+    const episodes = state.watch.episodes;
+    if (!anime || !episodes.length) return;
+
+    const total = episodes.length;
+    const title = anime.title_english || anime.title || '';
+
+    const existing = $('#dlBatchModal');
+    if (existing) existing.remove();
+
+    const fromInput = el('input', {
+        type: 'number', min: 1, max: total, value: 1,
+        className: 'dl-range__input', id: 'dlFrom',
+    });
+    const toInput = el('input', {
+        type: 'number', min: 1, max: total, value: Math.min(12, total),
+        className: 'dl-range__input', id: 'dlTo',
+    });
+
+    // Smart presets based on total count
+    const presetDefs = [];
+    if (total >= 12)  presetDefs.push({ label: 'Eps 1–12',  from: 1,  to: 12 });
+    if (total >= 24)  presetDefs.push({ label: 'Eps 13–24', from: 13, to: 24 });
+    if (total >= 48)  presetDefs.push({ label: 'Eps 25–48', from: 25, to: 48 });
+    if (total >= 49)  presetDefs.push({ label: `All ${total}`, from: 1, to: total });
+
+    const presetBtns = presetDefs.map(p =>
+        el('button', {
+            className: 'btn btn--outline btn--sm',
+            onClick: () => { fromInput.value = p.from; toInput.value = p.to; },
+        }, p.label)
+    );
+
+    const startBtn = el('button', {
+        className: 'btn btn--primary',
+        onClick: () => {
+            const from = Math.max(1, parseInt(fromInput.value) || 1);
+            const to   = Math.min(total, parseInt(toInput.value) || total);
+            if (from > to) return;
+            const eps = episodes.filter(e => e.number >= from && e.number <= to);
+            closeBatchModal();
+            startSeriesDownload(eps);
+        },
+    }, 'Start Download');
+
+    const modal = el('div', { className: 'modal-overlay', id: 'dlBatchModal' },
+        el('div', { className: 'modal dl-modal' },
+            el('button', { className: 'modal__close', 'aria-label': 'Close' }, '✕'),
+            el('h2', { className: 'dl-modal__title' }, `Download — ${title}`),
+            el('p', { className: 'dl-modal__info' }, `${total} episodes available`),
+            el('div', { className: 'dl-presets' }, ...presetBtns),
+            el('div', { className: 'dl-range' },
+                el('label', {}, 'From ep ', fromInput),
+                el('span', { className: 'dl-range__sep' }, '–'),
+                el('label', {}, 'to ', toInput),
+                startBtn,
+            ),
+        ),
+    );
+
+    // Wire close button
+    modal.querySelector('.modal__close').addEventListener('click', closeBatchModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeBatchModal(); });
+
+    document.body.appendChild(modal);
+    document.body.classList.add('modal-open');
+    requestAnimationFrame(() => modal.classList.add('modal-overlay--visible'));
+
+    const onEsc = (e) => { if (e.key === 'Escape') closeBatchModal(); };
+    document.addEventListener('keydown', onEsc, { once: true });
+}
+
+function closeBatchModal() {
+    const modal = $('#dlBatchModal');
+    if (modal) {
+        modal.classList.remove('modal-overlay--visible');
+        setTimeout(() => { modal.remove(); document.body.classList.remove('modal-open'); }, 300);
     }
 }

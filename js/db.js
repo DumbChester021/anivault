@@ -96,6 +96,12 @@ export const history = {
             duration: duration,
             is_dub: isDub,
             updatedAt: Date.now(),
+            score: anime.score || null,
+            type: anime.type || null,
+            status: anime.status || null,
+            season: anime.season || null,
+            year: anime.year || null,
+            episodes: anime.episodes || null,
         };
         return txOp(STORE_HISTORY, 'readwrite', s => s.put(record));
     },
