@@ -1,8 +1,14 @@
 /**
  * Episode download engine — HLS (m3u8 → .ts) and MP4.
+ * When subtitles are provided (sub episodes), video + VTT are muxed into MKV
+ * using ffmpeg.wasm (lazy-loaded ~30 MB on first use).
  * Provides a sequential DownloadQueue for batch downloads.
  */
 import { CONSUMET_API_BASE } from './config.js';
+import { muxWithSubtitle } from './muxer.js';
+
+const HLS_CONCURRENCY = 8;  // parallel segment fetches
+const MP4_PARTS = 8;        // parallel range request splits
 
 const proxy = (url) =>
     `${CONSUMET_API_BASE}/utils/cors?url=${encodeURIComponent(url)}`;
@@ -20,6 +26,8 @@ function triggerSave(blob, filename) {
 export function sanitizeName(str) {
     return String(str)
         .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/[\x00-\x1f\x7f]/g, '')
+        .replace(/^\.+/, '_')
         .replace(/\s+/g, '_')
         .slice(0, 80);
 }
@@ -73,42 +81,70 @@ async function resolveSegments(m3u8Url, signal) {
 }
 
 /**
- * Download HLS stream as a concatenated .ts file.
- * @param {string} m3u8Url
- * @param {string} filename - without extension
- * @param {(progress: number) => void} [onProgress] - 0..1
- * @param {AbortSignal} [signal]
+ * Assemble HLS stream as a concatenated .ts Blob (does not save).
  */
-export async function downloadM3u8(m3u8Url, filename, onProgress, signal) {
+async function assembleM3u8(m3u8Url, onProgress, signal) {
     const segments = await resolveSegments(m3u8Url, signal);
-    const buffers = [];
-    for (let i = 0; i < segments.length; i++) {
+    const buffers = new Array(segments.length);
+    let completed = 0;
+
+    for (let start = 0; start < segments.length; start += HLS_CONCURRENCY) {
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-        buffers.push(await fetchBuf(segments[i], signal));
-        onProgress?.((i + 1) / segments.length);
+        const batch = segments.slice(start, start + HLS_CONCURRENCY);
+        await Promise.all(batch.map(async (url, j) => {
+            buffers[start + j] = await fetchBuf(url, signal);
+            onProgress?.(++completed / segments.length);
+        }));
     }
-    triggerSave(new Blob(buffers, { type: 'video/mp2t' }), `${filename}.ts`);
+
+    return new Blob(buffers, { type: 'video/mp2t' });
 }
 
 /**
- * Download MP4 source with streaming progress when content-length is known.
- * @param {string} url
- * @param {string} filename - without extension
- * @param {(progress: number) => void} [onProgress] - 0..1
- * @param {AbortSignal} [signal]
+ * Assemble MP4 using parallel range requests (does not save).
+ * Falls back to single-stream if server doesn't support Range.
  */
-export async function downloadMp4(url, filename, onProgress, signal) {
+async function assembleMp4(url, onProgress, signal) {
+    let total = 0;
+    let acceptsRange = false;
+    try {
+        const head = await fetch(proxy(url), { method: 'HEAD', signal });
+        total = parseInt(head.headers.get('content-length') || '0', 10);
+        acceptsRange = head.headers.get('accept-ranges') === 'bytes';
+    } catch { /* fall through */ }
+
+    if (total && acceptsRange) {
+        const chunkSize = Math.ceil(total / MP4_PARTS);
+        const parts = new Array(MP4_PARTS);
+        let received = 0;
+
+        await Promise.all(Array.from({ length: MP4_PARTS }, async (_, i) => {
+            if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize - 1, total - 1);
+            const r = await fetch(proxy(url), {
+                headers: { Range: `bytes=${start}-${end}` },
+                signal,
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            parts[i] = new Uint8Array(await r.arrayBuffer());
+            received += parts[i].length;
+            onProgress?.(received / total);
+        }));
+
+        return new Blob(parts, { type: 'video/mp4' });
+    }
+
+    // Fallback: single-stream with progress
     const r = await fetch(proxy(url), { signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-
-    const total = parseInt(r.headers.get('content-length') || '0', 10);
+    const cl = parseInt(r.headers.get('content-length') || '0', 10);
     const reader = r.body?.getReader();
 
-    if (!reader || !total) {
+    if (!reader || !cl) {
         const blob = await r.blob();
         onProgress?.(1);
-        triggerSave(blob, `${filename}.mp4`);
-        return;
+        return blob;
     }
 
     const chunks = [];
@@ -119,24 +155,71 @@ export async function downloadMp4(url, filename, onProgress, signal) {
         if (signal?.aborted) { reader.cancel(); throw new DOMException('Aborted', 'AbortError'); }
         chunks.push(value);
         received += value.length;
-        onProgress?.(received / total);
+        onProgress?.(received / cl);
     }
-    triggerSave(new Blob(chunks, { type: 'video/mp4' }), `${filename}.mp4`);
+    return new Blob(chunks, { type: 'video/mp4' });
 }
 
 /**
- * Download an episode given its sources array (picks m3u8 over mp4).
+ * Download an episode given its sources and optional subtitles.
+ * - With subtitles (sub episode): muxes into .mkv with embedded sub via ffmpeg.wasm.
+ * - Without subtitles: saves raw .ts or .mp4.
+ *
+ * onProgress receives values 0..1 where:
+ *   0..0.85 = video download
+ *   0.85..0.95 = ffmpeg.wasm load (first use only)
+ *   0.95..1.0 = muxing
+ *
  * @param {Array<{url: string, isM3U8: boolean}>} sources
+ * @param {Array<{url: string, lang: string}>} subtitles
  * @param {string} filename - without extension
  * @param {(progress: number) => void} [onProgress]
  * @param {AbortSignal} [signal]
  */
-export async function downloadFromSources(sources, filename, onProgress, signal) {
+export async function downloadFromSources(sources, subtitles, filename, onProgress, signal) {
     const m3u8 = sources.find(s => s.isM3U8);
-    const mp4 = sources.find(s => !s.isM3U8);
-    if (m3u8) return downloadM3u8(m3u8.url, filename, onProgress, signal);
-    if (mp4) return downloadMp4(mp4.url, filename, onProgress, signal);
-    throw new Error('No downloadable source found');
+    const mp4  = sources.find(s => !s.isM3U8);
+
+    // Pick English subtitle, falling back to first non-thumbnails track
+    const engSub = subtitles?.find(s =>
+        s?.url && s.lang?.toLowerCase() === 'english'
+    ) ?? subtitles?.find(s =>
+        s?.url && s.lang?.toLowerCase() !== 'thumbnails'
+    );
+
+    // Scale download progress to 0..0.85 when we'll be muxing
+    const dlScale = engSub ? 0.85 : 1;
+    const dlProgress = onProgress ? (p) => onProgress(p * dlScale) : undefined;
+
+    let videoBlob;
+    if (m3u8) {
+        videoBlob = await assembleM3u8(m3u8.url, dlProgress, signal);
+    } else if (mp4) {
+        videoBlob = await assembleMp4(mp4.url, dlProgress, signal);
+    } else {
+        throw new Error('No downloadable source found');
+    }
+
+    if (!engSub) {
+        // No subtitle — save raw video
+        const ext = m3u8 ? 'ts' : 'mp4';
+        triggerSave(videoBlob, `${filename}.${ext}`);
+        return;
+    }
+
+    // Fetch VTT text
+    const vttRes = await fetch(proxy(engSub.url), { signal });
+    if (!vttRes.ok) throw new Error(`Subtitle fetch failed: HTTP ${vttRes.status}`);
+    const vttText = await vttRes.text();
+
+    // Mux into MKV
+    const muxedBlob = await muxWithSubtitle(videoBlob, vttText, (phase) => {
+        if (phase === 'loading') onProgress?.(0.87);
+        if (phase === 'muxing')  onProgress?.(0.95);
+    });
+
+    onProgress?.(1);
+    triggerSave(muxedBlob, `${filename}.mkv`);
 }
 
 /**
@@ -163,7 +246,7 @@ export class DownloadQueue {
      * @param {Array<{id: string, number: number, title?: string}>} episodes
      * @param {string} animeName
      * @param {boolean} isDub
-     * @param {(epId: string, isDub: boolean) => Promise<{sources: Array}>} getSourcesFn
+     * @param {(epId: string, isDub: boolean) => Promise<{sources: Array, subtitles: Array}>} getSourcesFn
      */
     async run(episodes, animeName, isDub, getSourcesFn) {
         this._ac = new AbortController();
@@ -179,8 +262,13 @@ export class DownloadQueue {
                 const data = await getSourcesFn(ep.id, isDub);
                 const sources = data?.sources ?? [];
                 if (!sources.length) throw new Error('No sources returned');
+
+                // Pass subtitles for sub episodes; dub has no meaningful subs
+                const subtitles = isDub ? [] : (data?.subtitles ?? []);
+
                 await downloadFromSources(
                     sources,
+                    subtitles,
                     filename,
                     (pct) => this.onProgress?.(ep, pct, i, total),
                     signal,

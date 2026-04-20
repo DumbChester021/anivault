@@ -1,57 +1,129 @@
 #!/bin/sh
-# dev.sh — Start dev server with PID management
-# Ensures only one instance runs at a time.
+# dev.sh — Start AniVault dev environment (frontend + consumet)
 
-PORT=3000
-PID_FILE=".dev.pid"
-LOG_FILE=".dev.log"
+FRONTEND_PORT=3000
+CONSUMET_PORT=3001
+CONSUMET_DIR="/mnt/data/Github/express/api.consumet.org"
 
-# Kill previous server if PID file exists
-if [ -f "$PID_FILE" ]; then
-  OLD_PID=$(cat "$PID_FILE")
-  if kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "[dev] Killing previous server (PID $OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null
-    # Wait a moment for clean shutdown
-    sleep 0.5
-    # Force kill if still alive
+FRONTEND_PID_FILE=".dev.pid"
+CONSUMET_PID_FILE=".dev.consumet.pid"
+FRONTEND_LOG=".dev.log"
+CONSUMET_LOG=".dev.consumet.log"
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+kill_pid_file() {
+  FILE=$1
+  LABEL=$2
+  if [ -f "$FILE" ]; then
+    OLD_PID=$(cat "$FILE")
     if kill -0 "$OLD_PID" 2>/dev/null; then
-      kill -9 "$OLD_PID" 2>/dev/null
+      echo "[$LABEL] Stopping previous process (PID $OLD_PID)..."
+      kill "$OLD_PID" 2>/dev/null
+      sleep 0.5
+      kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" 2>/dev/null
     fi
-    echo "[dev] Previous server stopped."
-  else
-    echo "[dev] Stale PID file found (process $OLD_PID not running). Cleaning up."
+    rm -f "$FILE"
   fi
-  rm -f "$PID_FILE"
+}
+
+kill_port() {
+  PORT=$1
+  PIDS=$(lsof -ti :$PORT 2>/dev/null)
+  if [ -n "$PIDS" ]; then
+    echo "  Port $PORT in use by PID(s) $PIDS — killing..."
+    echo "$PIDS" | xargs kill 2>/dev/null
+    sleep 0.3
+  fi
+}
+
+wait_for_port() {
+  PORT=$1
+  LABEL=$2
+  TIMEOUT=20
+  i=0
+  while [ $i -lt $TIMEOUT ]; do
+    # Use /dev/tcp to check if port is open (bash built-in)
+    (echo > /dev/tcp/127.0.0.1/$PORT) 2>/dev/null && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  echo "[$LABEL] ✗ Did not become ready after ${TIMEOUT}s"
+  return 1
+}
+
+# ─── Cleanup previous runs ───────────────────────────────────────────────────
+
+kill_pid_file "$FRONTEND_PID_FILE" "frontend"
+kill_pid_file "$CONSUMET_PID_FILE" "consumet"
+kill_port $FRONTEND_PORT
+kill_port $CONSUMET_PORT
+
+# ─── Start Consumet (LOCAL) ──────────────────────────────────────────────────
+
+if [ ! -d "$CONSUMET_DIR" ]; then
+  echo "[consumet] ✗ Directory not found: $CONSUMET_DIR"
+  echo "[consumet]   Skipping — streaming features will be unavailable locally."
+  CONSUMET_STARTED=0
+else
+  echo "[consumet] Starting LOCAL at http://localhost:$CONSUMET_PORT ..."
+  cd "$CONSUMET_DIR"
+  PORT=$CONSUMET_PORT yarn dev > "$OLDPWD/$CONSUMET_LOG" 2>&1 &
+  CONSUMET_PID=$!
+  cd "$OLDPWD"
+  echo "$CONSUMET_PID" > "$CONSUMET_PID_FILE"
+  CONSUMET_STARTED=1
 fi
 
-# Also check if something is already bound to the port
-EXISTING=$(lsof -ti :$PORT 2>/dev/null)
-if [ -n "$EXISTING" ]; then
-  echo "[dev] Port $PORT in use by PID(s): $EXISTING. Killing..."
-  echo "$EXISTING" | xargs kill 2>/dev/null
-  sleep 0.5
+# ─── Start Frontend ───────────────────────────────────────────────────────────
+
+echo "[frontend] Starting LOCAL at http://localhost:$FRONTEND_PORT ..."
+npx -y serve . -l tcp://0.0.0.0:$FRONTEND_PORT -s > "$FRONTEND_LOG" 2>&1 &
+FRONTEND_PID=$!
+echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
+
+# ─── Health checks ───────────────────────────────────────────────────────────
+
+echo ""
+echo "Waiting for services..."
+
+if [ "$CONSUMET_STARTED" = "1" ]; then
+  if wait_for_port $CONSUMET_PORT "consumet"; then
+    echo "[consumet] ✓ READY  →  http://localhost:$CONSUMET_PORT  (LOCAL)"
+  else
+    echo "[consumet] ✗ FAILED — check $CONSUMET_LOG"
+  fi
+else
+  echo "[consumet] ✗ SKIPPED (dir missing)"
 fi
 
-# Start server in background
-echo "[dev] Starting server on http://localhost:$PORT ..."
-npx -y serve . -l $PORT -s > "$LOG_FILE" 2>&1 &
-SERVER_PID=$!
+if wait_for_port $FRONTEND_PORT "frontend"; then
+  echo "[frontend] ✓ READY  →  http://localhost:$FRONTEND_PORT  (LOCAL)"
+else
+  echo "[frontend] ✗ FAILED — check $FRONTEND_LOG"
+fi
 
-# Save PID
-echo "$SERVER_PID" > "$PID_FILE"
-echo "[dev] Server started (PID $SERVER_PID). Logs → $LOG_FILE"
+echo ""
+echo "─────────────────────────────────────────────────"
+echo "  Jikan API  →  https://api.jikan.moe/v4  (REMOTE)"
+echo "  Consumet   →  http://localhost:$CONSUMET_PORT  (LOCAL)"
+echo "  Frontend   →  http://localhost:$FRONTEND_PORT  (LOCAL)"
+echo "─────────────────────────────────────────────────"
+echo ""
+echo "Tailing frontend log (Ctrl+C to stop all)..."
+echo ""
 
-# Trap to clean up on script exit (Ctrl+C)
+# ─── Cleanup on exit ─────────────────────────────────────────────────────────
+
 cleanup() {
   echo ""
-  echo "[dev] Shutting down server (PID $SERVER_PID)..."
-  kill "$SERVER_PID" 2>/dev/null
-  rm -f "$PID_FILE"
+  echo "[dev] Shutting down..."
+  kill "$FRONTEND_PID" 2>/dev/null
+  [ "$CONSUMET_STARTED" = "1" ] && kill "$CONSUMET_PID" 2>/dev/null
+  rm -f "$FRONTEND_PID_FILE" "$CONSUMET_PID_FILE"
   echo "[dev] Done."
   exit 0
 }
 trap cleanup INT TERM
 
-# Tail the log so user sees output
-tail -f "$LOG_FILE"
+tail -f "$FRONTEND_LOG"

@@ -1,8 +1,13 @@
 # Dev artifacts
 .dev.pid
 .dev.log
+.dev.*.pid
+.dev.*.log
 node_modules/
 .env
+
+# Local secrets (copy env.example.js → env.js and fill in values)
+js/env.js
 
 # Hianime API (separate repo)
 hianime-api/

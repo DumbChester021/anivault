@@ -3,9 +3,67 @@
  * Anime cards, detail modal, filter panel, carousels, skeletons
  */
 
-import { el, formatScore, formatNumber, truncate, formatDate, escapeHtml, $, $$ } from './utils.js';
+import { el, formatScore, formatNumber, truncate, formatDate, escapeHtml, $, $$, showToast } from './utils.js';
 import { favorites, favoritesCache } from './db.js';
 import { CONSUMET_API_BASE } from './config.js';
+
+// ─── Interaction Helpers (heart burst, haptic) ───────────────────────
+
+/** Trigger a short haptic vibration on mobile */
+function triggerHaptic(pattern = [15]) {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+}
+
+/** Spawn floating heart particles from a button element */
+function spawnHeartBurst(btn) {
+    const container = btn.closest('.anime-card__image-wrap') || btn.parentElement;
+    if (!container) return;
+
+    const burst = el('div', { className: 'heart-burst' });
+    const particles = ['♥', '♥', '❤', '♥', '💗', '♥'];
+    const count = 6;
+
+    for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 / count) * i + (Math.random() - 0.5) * 0.6;
+        const dist = 18 + Math.random() * 14;
+        const px = Math.cos(angle) * dist;
+        const py = Math.sin(angle) * dist;
+        const dur = 0.5 + Math.random() * 0.3;
+
+        const p = el('span', {
+            className: 'heart-burst__particle',
+            style: `--px:${px}px;--py:${py}px;--burst-duration:${dur}s;`,
+        }, particles[i % particles.length]);
+        burst.appendChild(p);
+    }
+
+    // Position burst at button center within container
+    const cRect = container.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    burst.style.left = (bRect.left - cRect.left + bRect.width / 2) + 'px';
+    burst.style.top = (bRect.top - cRect.top + bRect.height / 2) + 'px';
+    burst.style.width = '0';
+    burst.style.height = '0';
+
+    container.appendChild(burst);
+    setTimeout(() => burst.remove(), 900);
+}
+
+/** Trigger pop/unpop animation class on an element */
+function triggerAnim(el, className, duration = 500) {
+    el.classList.remove(className);
+    // Force reflow so re-adding the class restarts the animation
+    void el.offsetWidth;
+    el.classList.add(className);
+    setTimeout(() => el.classList.remove(className), duration);
+}
+
+/** Extract YouTube video ID from an embed URL */
+function extractYouTubeId(url) {
+    if (!url) return null;
+    const m = url.match(/\/embed\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : null;
+}
 
 function formatStatusLabel(st) {
     if (!st) return '';
@@ -66,11 +124,18 @@ export function createAnimeCard(anime, onClick, index = 0) {
             favBtn.classList.remove('anime-card__fav--active');
             favBtn.title = 'Add to favorites';
             favBtn.textContent = '♡';
+            triggerAnim(favBtn, 'anime-card__fav--unpop', 350);
+            triggerHaptic([10]);
+            showToast(`Removed from favorites`, 'info', 2000);
         } else {
             await favorites.add(anime);
             favBtn.classList.add('anime-card__fav--active');
             favBtn.title = 'Remove from favorites';
             favBtn.textContent = '♥';
+            triggerAnim(favBtn, 'anime-card__fav--pop', 500);
+            spawnHeartBurst(favBtn);
+            triggerHaptic([10, 30, 15]);
+            showToast(`Added to favorites`, 'success', 2000);
         }
         document.dispatchEvent(new CustomEvent('favoritesUpdated'));
     });
@@ -133,17 +198,54 @@ export function showSkeletons(container, count = 12) {
 export function createCarousel(title, animeList, onCardClick) {
     const track = el('div', { className: 'carousel__track' });
 
-    for (let i = 0; i < animeList.length; i++) {
-        track.appendChild(createAnimeCard(animeList[i], onCardClick, i));
+    // Deduplicate by mal_id to guard against API returning duplicate entries
+    const seen = new Set();
+    const unique = animeList.filter(a => {
+        if (!a.mal_id || seen.has(a.mal_id)) return false;
+        seen.add(a.mal_id);
+        return true;
+    });
+
+    for (let i = 0; i < unique.length; i++) {
+        track.appendChild(createAnimeCard(unique[i], onCardClick, i));
     }
+
+    const leftBtn = el('button', {
+        className: 'carousel__arrow carousel__arrow--left',
+        'aria-label': 'Scroll left',
+        onClick: () => { track.scrollBy({ left: -600, behavior: 'smooth' }); },
+    }, '‹');
+
+    const rightBtn = el('button', {
+        className: 'carousel__arrow carousel__arrow--right',
+        'aria-label': 'Scroll right',
+        onClick: () => { track.scrollBy({ left: 600, behavior: 'smooth' }); },
+    }, '›');
+
+    /** Update disabled state of both arrow buttons based on scroll position */
+    function syncArrows() {
+        const threshold = 4; // sub-pixel tolerance
+        const atStart = track.scrollLeft <= threshold;
+        const atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - threshold;
+
+        leftBtn.disabled = atStart;
+        leftBtn.classList.toggle('carousel__arrow--disabled', atStart);
+        rightBtn.disabled = atEnd;
+        rightBtn.classList.toggle('carousel__arrow--disabled', atEnd);
+    }
+
+    // Listen for scroll & resize to keep arrows synced
+    track.addEventListener('scroll', syncArrows, { passive: true });
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(syncArrows).observe(track);
+    }
+    // Initial sync after cards render
+    requestAnimationFrame(syncArrows);
 
     const section = el('section', { className: 'carousel' },
         el('div', { className: 'carousel__header' },
             el('h2', { className: 'carousel__title' }, title),
-            el('div', { className: 'carousel__arrows' },
-                el('button', { className: 'carousel__arrow carousel__arrow--left', 'aria-label': 'Scroll left', onClick: () => { track.scrollBy({ left: -600, behavior: 'smooth' }); } }, '‹'),
-                el('button', { className: 'carousel__arrow carousel__arrow--right', 'aria-label': 'Scroll right', onClick: () => { track.scrollBy({ left: 600, behavior: 'smooth' }); } }, '›'),
-            ),
+            el('div', { className: 'carousel__arrows' }, leftBtn, rightBtn),
         ),
         track,
     );
@@ -218,7 +320,7 @@ export function createLoadMoreBtn(onClick) {
 
 // ─── Anime Detail Modal ──────────────────────────────────────────────
 
-export function openDetailModal(anime, recommendations = []) {
+export function openDetailModal(anime, recommendations = [], loading = false) {
     // Close existing
     closeDetailModal();
 
@@ -227,69 +329,150 @@ export function openDetailModal(anime, recommendations = []) {
     const titleJp = anime.title_japanese || '';
     const synopsis = anime.synopsis || 'No synopsis available.';
 
-    // Genre tags
-    const genreTags = el('div', { className: 'detail__genres' });
-    for (const g of (anime.genres || [])) {
-        genreTags.appendChild(el('span', { className: 'tag' }, g.name));
-    }
-    for (const g of (anime.themes || [])) {
-        genreTags.appendChild(el('span', { className: 'tag tag--theme' }, g.name));
-    }
-    for (const d of (anime.demographics || [])) {
-        genreTags.appendChild(el('span', { className: 'tag tag--demo' }, d.name));
+    // Poster element — skeleton when loading, image with fallback otherwise
+    let posterContent;
+    if (loading) {
+        posterContent = el('div', { className: 'modal__poster-skeleton skeleton-pulse' });
+    } else {
+        const posterImg = el('img', { src: img, alt: title, loading: 'lazy' });
+        posterImg.onerror = function () {
+            this.onerror = null;
+            this.style.display = 'none';
+            const fallback = el('div', { className: 'modal__poster-fallback' }, '🎬');
+            this.parentNode.appendChild(fallback);
+        };
+        posterContent = posterImg;
     }
 
-    // Info table
-    const infoRows = [
-        ['Type', anime.type],
-        ['Episodes', anime.episodes ?? '—'],
-        ['Status', formatStatusLabel(anime.status)],
-        ['Aired', anime.aired?.string || '—'],
-        ['Rating', anime.rating],
-        ['Source', anime.source],
-        ['Studios', (anime.studios || []).map(s => s.name).join(', ') || '—'],
-        ['Duration', anime.duration],
-    ];
-
-    const infoTable = el('table', { className: 'detail__info-table' });
-    for (const [label, value] of infoRows) {
-        if (value) {
-            infoTable.appendChild(el('tr', {},
-                el('td', { className: 'detail__info-label' }, label),
-                el('td', {}, String(value)),
-            ));
+    // Genre tags — skeleton placeholders when loading
+    let genreTags;
+    if (loading) {
+        genreTags = el('div', { className: 'detail__genres' },
+            el('span', { className: 'skeleton-tag skeleton-pulse' }),
+            el('span', { className: 'skeleton-tag skeleton-pulse' }),
+            el('span', { className: 'skeleton-tag skeleton-pulse' }),
+        );
+    } else {
+        genreTags = el('div', { className: 'detail__genres' });
+        for (const g of (anime.genres || [])) {
+            genreTags.appendChild(el('span', { className: 'tag' }, g.name));
+        }
+        for (const g of (anime.themes || [])) {
+            genreTags.appendChild(el('span', { className: 'tag tag--theme' }, g.name));
+        }
+        for (const d of (anime.demographics || [])) {
+            genreTags.appendChild(el('span', { className: 'tag tag--demo' }, d.name));
         }
     }
 
-    // Stats row
-    const statsRow = el('div', { className: 'detail__stats' },
-        createStatBadge('Score', formatScore(anime.score)),
-        createStatBadge('Rank', anime.rank ? `#${anime.rank}` : '—'),
-        createStatBadge('Popularity', anime.popularity ? `#${anime.popularity}` : '—'),
-        createStatBadge('Members', formatNumber(anime.members)),
-        createStatBadge('Favorites', formatNumber(anime.favorites)),
-    );
+    // Info table — skeleton rows when loading
+    let infoTable;
+    if (loading) {
+        infoTable = el('table', { className: 'detail__info-table detail__info-table--loading' });
+        for (let i = 0; i < 5; i++) {
+            infoTable.appendChild(el('tr', {},
+                el('td', { className: 'detail__info-label' },
+                    el('span', { className: 'skeleton-line skeleton-pulse', style: 'width:60px;height:13px;display:block' }),
+                ),
+                el('td', {},
+                    el('span', { className: 'skeleton-line skeleton-pulse', style: `width:${80 + i * 15}px;height:13px;display:block` }),
+                ),
+            ));
+        }
+    } else {
+        const infoRows = [
+            ['Type', anime.type],
+            ['Episodes', anime.episodes ?? '—'],
+            ['Status', formatStatusLabel(anime.status)],
+            ['Aired', anime.aired?.string || '—'],
+            ['Rating', anime.rating],
+            ['Source', anime.source],
+            ['Studios', (anime.studios || []).map(s => s.name).join(', ') || '—'],
+            ['Duration', anime.duration],
+        ];
+        infoTable = el('table', { className: 'detail__info-table' });
+        for (const [label, value] of infoRows) {
+            if (value) {
+                infoTable.appendChild(el('tr', {},
+                    el('td', { className: 'detail__info-label' }, label),
+                    el('td', {}, String(value)),
+                ));
+            }
+        }
+    }
 
-    // Trailer
-    let trailerEl = null;
-    if (anime.trailer?.embed_url) {
-        trailerEl = el('div', { className: 'detail__trailer' },
-            el('h3', {}, 'Trailer'),
-            el('div', { className: 'detail__trailer-wrap' },
-                el('iframe', {
-                    src: anime.trailer.embed_url.replace('autoplay=1', 'autoplay=0'),
-                    frameborder: '0',
-                    allowfullscreen: '',
-                    allow: 'accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture',
-                    loading: 'lazy',
-                }),
+    // Stats row — skeleton badges when loading
+    const statsRow = loading
+        ? el('div', { className: 'detail__stats detail__stats--loading' },
+            ...Array(5).fill(null).map(() =>
+                el('div', { className: 'stat-badge--skeleton skeleton-pulse' }),
             ),
+        )
+        : el('div', { className: 'detail__stats' },
+            createStatBadge('Score', formatScore(anime.score)),
+            createStatBadge('Rank', anime.rank ? `#${anime.rank}` : '—'),
+            createStatBadge('Popularity', anime.popularity ? `#${anime.popularity}` : '—'),
+            createStatBadge('Members', formatNumber(anime.members)),
+            createStatBadge('Favorites', formatNumber(anime.favorites)),
         );
+
+    // Action buttons — skeleton placeholders when loading
+    const actionsEl = loading
+        ? el('div', { className: 'modal__actions modal__actions--loading' },
+            el('div', { className: 'skeleton-btn skeleton-pulse' }),
+            el('div', { className: 'skeleton-btn skeleton-pulse' }),
+        )
+        : el('div', { className: 'modal__actions' },
+            createWatchButton(anime),
+            createModalFavButton(anime),
+        );
+
+    // Title — skeleton line when loading
+    const titleEl = loading
+        ? el('div', { className: 'skeleton-line skeleton-pulse modal__title-skeleton' })
+        : el('h2', { className: 'modal__title' }, title);
+
+    // Synopsis — skeleton lines when loading
+    const synopsisEl = loading
+        ? el('div', { className: 'detail__synopsis' },
+            el('h3', {}, 'Synopsis'),
+            el('div', { className: 'skeleton-line skeleton-pulse', style: 'width:100%;height:13px;margin-bottom:8px' }),
+            el('div', { className: 'skeleton-line skeleton-pulse', style: 'width:92%;height:13px;margin-bottom:8px' }),
+            el('div', { className: 'skeleton-line skeleton-pulse', style: 'width:97%;height:13px;margin-bottom:8px' }),
+            el('div', { className: 'skeleton-line skeleton-pulse', style: 'width:85%;height:13px' }),
+        )
+        : el('div', { className: 'detail__synopsis' },
+            el('h3', {}, 'Synopsis'),
+            el('p', {}, synopsis),
+        );
+
+    let trailerEl = null;
+    if (!loading) {
+        const youtubeId = anime.trailer?.youtube_id || extractYouTubeId(anime.trailer?.embed_url);
+        if (youtubeId) {
+            const ytUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+            const thumbUrl = `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`;
+            const wrap = el('div', { className: 'detail__trailer-wrap detail__trailer-thumb' });
+            const thumb = el('img', { src: thumbUrl, alt: 'Trailer thumbnail', loading: 'lazy' });
+            const playBtn = el('div', { className: 'detail__trailer-play' },
+                el('svg', { viewBox: '0 0 68 48', xmlns: 'http://www.w3.org/2000/svg' },
+                    el('path', { d: 'M66.5 7.7c-.8-2.9-3-5.2-5.9-5.9C55.8 0 34 0 34 0S12.2 0 7.4 1.8C4.5 2.6 2.3 4.9 1.5 7.7 0 12.6 0 24 0 24s0 11.4 1.5 16.3c.8 2.9 3 5.2 5.9 5.9C12.2 48 34 48 34 48s21.8 0 26.6-1.8c2.9-.8 5.1-3 5.9-5.9C68 35.4 68 24 68 24s0-11.4-1.5-16.3z', fill: '#ff0000' }),
+                    el('path', { d: 'M45 24 27 14v20', fill: '#fff' }),
+                ),
+            );
+            wrap.appendChild(thumb);
+            wrap.appendChild(playBtn);
+            wrap.addEventListener('click', () => window.open(ytUrl, '_blank', 'noopener'));
+            trailerEl = el('div', { className: 'detail__trailer' },
+                el('h3', {}, 'Trailer'),
+                wrap,
+            );
+        }
     }
 
     // Recommendations
     let recsEl = null;
-    if (recommendations.length > 0) {
+    if (!loading && recommendations.length > 0) {
         const recsTrack = el('div', { className: 'carousel__track' });
         for (const rec of recommendations.slice(0, 12)) {
             const entry = rec.entry;
@@ -311,26 +494,20 @@ export function openDetailModal(anime, recommendations = []) {
             el('button', { className: 'modal__close', onClick: closeDetailModal, 'aria-label': 'Close' }, '✕'),
             el('div', { className: 'modal__header' },
                 el('div', { className: 'modal__poster' },
-                    el('img', { src: img, alt: title, loading: 'lazy' }),
+                    posterContent,
                 ),
                 el('div', { className: 'modal__header-info' },
-                    el('h2', { className: 'modal__title' }, title),
-                    titleJp ? el('p', { className: 'modal__title-jp' }, titleJp) : null,
+                    titleEl,
+                    !loading && titleJp ? el('p', { className: 'modal__title-jp' }, titleJp) : null,
                     statsRow,
                     genreTags,
-                    el('div', { className: 'modal__actions' },
-                        createWatchButton(anime),
-                        createModalFavButton(anime),
-                    ),
+                    actionsEl,
                 ),
             ),
             el('div', { className: 'modal__body' },
                 infoTable,
-                buildFranchiseSection(anime),
-                el('div', { className: 'detail__synopsis' },
-                    el('h3', {}, 'Synopsis'),
-                    el('p', {}, synopsis),
-                ),
+                !loading ? buildFranchiseSection(anime) : null,
+                synopsisEl,
                 trailerEl,
                 recsEl,
             ),
@@ -424,16 +601,24 @@ function createModalFavButton(anime) {
             await favorites.remove(anime.mal_id);
             btn.className = 'btn btn--outline modal__fav-btn';
             btn.textContent = '♡ Favorite';
+            triggerAnim(btn, 'modal__fav-btn--unpop', 400);
+            triggerHaptic([10]);
+            showToast(`Removed from favorites`, 'info', 2000);
         } else {
             await favorites.add(anime);
             btn.className = 'btn btn--outline modal__fav-btn modal__fav-btn--active';
             btn.textContent = '♥ Favorited';
+            triggerAnim(btn, 'modal__fav-btn--pop', 550);
+            triggerHaptic([10, 30, 15]);
+            showToast(`Added to favorites`, 'success', 2000);
         }
         // Sync visible card fav buttons
         document.querySelectorAll(`.anime-card__fav[data-mal-id="${anime.mal_id}"]`).forEach(b => {
             const nowFav = favoritesCache.has(anime.mal_id);
             b.classList.toggle('anime-card__fav--active', nowFav);
             b.textContent = nowFav ? '♥' : '♡';
+            // Mirror pop/unpop on synced card buttons
+            triggerAnim(b, nowFav ? 'anime-card__fav--pop' : 'anime-card__fav--unpop', 500);
         });
         document.dispatchEvent(new CustomEvent('favoritesUpdated'));
     });
@@ -587,12 +772,12 @@ export function createVideoPlayer(sources, subtitles = [], isSub = true) {
     const video = el('video', {
         className: 'player-video',
         controls: true,
-        autoplay: true,
         playsinline: true,
         id: 'animePlayer',
         crossOrigin: 'anonymous',
-        controlsList: 'nofullscreen',
     });
+    // Set muted as a property (not just attribute) — required for autoplay on mobile
+    video.muted = true;
 
     // Player settings (volume, captions, speed) are handled automatically by Plyr storage settings in app.js
 
@@ -637,6 +822,7 @@ export function createVideoPlayer(sources, subtitles = [], isSub = true) {
 
 /**
  * Create a "Watch" button for the detail modal.
+ * Shows air date / "Coming Soon" for upcoming anime instead.
  * Only shows for types likely available on AnimeKai.
  */
 export function createWatchButton(anime) {
@@ -644,6 +830,24 @@ export function createWatchButton(anime) {
     const type = (anime.type || '').toLowerCase();
     const excludedTypes = ['music'];
     if (excludedTypes.includes(type)) return null;
+
+    // Upcoming anime — show air date or "Coming Soon" instead of Watch
+    const statusLower = (anime.status || '').toLowerCase();
+    if (statusLower === 'not yet aired') {
+        let label = 'Coming Soon';
+        if (anime.aired?.from) {
+            try {
+                const airDate = new Date(anime.aired.from);
+                label = `📅 ${airDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+            } catch { /* fallback to Coming Soon */ }
+        } else if (anime.aired?.string && anime.aired.string !== '?') {
+            label = `📅 ${anime.aired.string}`;
+        }
+        return el('span', {
+            className: 'btn btn--outline watch-btn watch-btn--upcoming',
+            style: 'cursor:default; pointer-events:none; opacity:0.85;',
+        }, label);
+    }
 
     // Skip if it has no episodes
     if (anime.episodes === 0) return null;

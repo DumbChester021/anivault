@@ -13,7 +13,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css">
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css"
+    integrity="sha384-FDFJN4eDoTbFzL8KHLAOmtAicPaFc44D0JrdAwgO91ZDgGmAHrcpMWLCwTxBSVI7"
+    crossorigin="anonymous">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 
@@ -32,13 +34,54 @@
         <a href="#" class="nav__link" data-nav="search">Search</a>
         <a href="#" class="nav__link" data-nav="watch">Watch</a>
         <a href="#" class="nav__link" data-nav="vault">Vault</a>
+        <a href="#" class="nav__link nav__link--mobile-settings" data-nav="settings">Settings</a>
       </div>
 
-      <button class="nav__menu-btn" id="menuToggle" aria-label="Toggle menu">
-        <span></span><span></span><span></span>
-      </button>
+      <div class="nav__actions">
+        <div class="nav__bell-wrap" id="navBellWrap">
+          <button class="nav__bell" id="navBell" aria-label="Notifications">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <span class="nav__bell-dot hidden" id="navBellDot"></span>
+          </button>
+          <div class="notif-panel hidden" id="notifPanel">
+            <div class="notif-panel__header">
+              <span>Updates</span>
+              <button class="notif-panel__clear" id="notifClear">Clear all</button>
+            </div>
+            <div class="notif-panel__list" id="notifList"></div>
+            <div class="notif-panel__empty hidden" id="notifEmpty">No new updates</div>
+          </div>
+        </div>
 
-      <div class="nav__nsfw-toggle">
+        <!-- Auth -->
+        <div class="nav__auth" id="navAuth">
+          <button class="nav__auth-btn nav__auth-btn--login" id="navLoginBtn" aria-label="Sign in" style="display:none">Login</button>
+          <div class="nav__user" id="navUser" style="display:none">
+            <button class="nav__avatar" id="navAvatar" aria-label="Account menu"></button>
+            <div class="nav__user-menu hidden" id="navUserMenu">
+              <div class="nav__user-email" id="navUserEmail"></div>
+              <button class="nav__user-action" id="navSignOut">Sign out</button>
+            </div>
+          </div>
+        </div>
+
+        <button class="nav__settings-btn" id="navSettingsBtn" aria-label="Settings" data-nav="settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+
+        <button class="nav__menu-btn" id="menuToggle" aria-label="Toggle menu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+
+      <!-- Hidden NSFW toggle — kept in DOM for JS logic, controlled via Settings -->
+      <div class="nav__nsfw-toggle" style="display:none">
         <label class="nsfw-switch" for="nsfwToggle" title="Show NSFW content">
           <input type="checkbox" id="nsfwToggle">
           <span class="nsfw-switch__slider"></span>
@@ -48,9 +91,99 @@
     </div>
   </nav>
 
+  <!-- ─── Local Data Banner ────────────────────────────────────────── -->
+  <div class="local-data-banner hidden" id="localDataBanner">
+    <div class="local-data-banner__inner">
+      <span class="local-data-banner__icon">📦</span>
+      <span class="local-data-banner__msg" id="localDataMsg"></span>
+      <div class="local-data-banner__actions">
+        <button class="btn btn--sm btn--outline" id="localDataView">View Vault</button>
+        <button class="btn btn--sm btn--primary" id="localDataImport">Import to cloud</button>
+        <button class="local-data-banner__dismiss" id="localDataDismiss" aria-label="Don't show again and delete local data" title="Don't show again — deletes local data">Don't show again</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Auth Modal ───────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="authModal">
+    <div class="modal auth-modal">
+      <button class="modal__close" id="authModalClose" aria-label="Close">✕</button>
+
+      <!-- Decorative header -->
+      <div class="auth-modal__header">
+        <div class="auth-modal__icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#authGrad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <defs><linearGradient id="authGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#c084fc"/></linearGradient></defs>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <h2 class="auth-modal__title" id="authModalTitle">Sign in to AniVault</h2>
+        <p class="auth-modal__subtitle" id="authModalSubtitle">Sync your vault across all devices</p>
+      </div>
+
+      <div class="auth-modal__body">
+        <!-- Email form -->
+        <div class="auth-modal__error hidden" id="authError"></div>
+        <form class="auth-modal__form" id="authForm" autocomplete="on">
+          <div class="auth-input-group">
+            <label class="auth-input-group__label" for="authEmail">Email</label>
+            <div class="auth-input-group__wrap">
+              <svg class="auth-input-group__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+              <input class="auth-input-group__input" type="email" id="authEmail" name="email" placeholder="you@example.com" required autocomplete="email">
+            </div>
+          </div>
+          <div class="auth-input-group">
+            <label class="auth-input-group__label" for="authPassword">Password</label>
+            <div class="auth-input-group__wrap">
+              <svg class="auth-input-group__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <input class="auth-input-group__input" type="password" id="authPassword" name="password" placeholder="••••••••" required autocomplete="current-password" minlength="6">
+              <button type="button" class="auth-input-group__toggle" id="authPwToggle" aria-label="Show password" tabindex="-1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <!-- Password strength (sign-up only) -->
+            <div class="auth-strength" id="authStrengthWrap" style="display:none">
+              <div class="auth-strength__track"><div class="auth-strength__bar" id="authStrengthBar"></div></div>
+              <span class="auth-strength__label" id="authStrengthLabel"></span>
+            </div>
+          </div>
+          <!-- Honeypot (anti-bot, invisible to users) -->
+          <div class="auth-hp" aria-hidden="true">
+            <label for="authWebsite">Website</label>
+            <input type="text" id="authWebsite" name="website" tabindex="-1" autocomplete="off">
+          </div>
+          <button class="btn auth-modal__submit" type="submit" id="authSubmitBtn">Sign in</button>
+        </form>
+
+        <!-- Confirmation Success Screen (hidden by default) -->
+        <div class="auth-confirm hidden" id="authConfirmScreen">
+          <div class="auth-confirm__icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="url(#confirmGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <defs><linearGradient id="confirmGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs>
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <h3 class="auth-confirm__title">Check your inbox</h3>
+          <p class="auth-confirm__email" id="authConfirmEmail"></p>
+          <p class="auth-confirm__desc">We've sent a confirmation link to your email. Click it to activate your account, then come back and sign in.</p>
+          <div class="auth-confirm__tips">
+            <p>📧 Didn't receive it? Check your spam folder</p>
+            <button class="btn btn--outline btn--sm" id="authResendBtn">Resend confirmation email</button>
+          </div>
+          <button class="auth-modal__toggle-btn" id="authBackToLogin">← Back to sign in</button>
+        </div>
+
+        <p class="auth-modal__toggle" id="authToggleWrap">
+          <span id="authToggleMsg">Don't have an account?</span>
+          <button class="auth-modal__toggle-btn" id="authToggleBtn">Sign up</button>
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- ─── Home Page ──────────────────────────────────────────────── -->
   <main class="page page--active" id="page-home">
-    <div id="homeFavorites"></div>
     <div id="homeContent" class="page__content"></div>
   </main>
 
@@ -82,7 +215,7 @@
             <div class="quick-filters">
               <button class="btn btn--sm btn--accent" id="quickCompleted">Latest Completed</button>
               <button class="btn btn--sm btn--outline" id="quickAiring">Top Airing</button>
-              <button class="btn btn--sm btn--outline" id="quickTopRated">Top Rated (8+)</button>
+              <button class="btn btn--sm btn--outline" id="quickTopRated" style="display:none">Top Rated (18+)</button>
             </div>
           </div>
 
@@ -268,6 +401,205 @@
     </div>
   </main>
 
+  <!-- ─── Settings Page ───────────────────────────────────────────── -->
+  <main class="page" id="page-settings">
+    <div class="settings-page">
+
+      <!-- Sidebar -->
+      <aside class="settings-sidebar">
+        <nav class="settings-nav" aria-label="Settings categories">
+          <button class="settings-nav__item settings-nav__item--active" data-settings-section="content">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Content
+          </button>
+          <button class="settings-nav__item" data-settings-section="notifications">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            Notifications
+          </button>
+          <button class="settings-nav__item" data-settings-section="playback">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Playback
+          </button>
+          <button class="settings-nav__item" data-settings-section="data">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Data &amp; Storage
+          </button>
+          <button class="settings-nav__item" data-settings-section="account">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Account
+          </button>
+        </nav>
+      </aside>
+
+      <!-- Content -->
+      <div class="settings-content">
+
+        <!-- ── Content ─────────────────────────────────────────────── -->
+        <section class="settings-section" id="settings-section-content">
+          <div class="settings-section__header">
+            <h2>Content Preferences</h2>
+            <p>Control what content is shown across the app</p>
+          </div>
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">18+ / NSFW Content</div>
+                <div class="settings-row__desc">Show mature and adult content in search results and recommendations</div>
+              </div>
+              <label class="settings-toggle" aria-label="Enable 18+ content">
+                <input type="checkbox" id="settingsNsfwToggle">
+                <span class="settings-toggle__track"></span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Notifications ──────────────────────────────────────── -->
+        <section class="settings-section settings-section--hidden" id="settings-section-notifications">
+          <div class="settings-section__header">
+            <h2>Notifications</h2>
+            <p>Control episode update alerts for your favorites</p>
+          </div>
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Episode Update Alerts</div>
+                <div class="settings-row__desc">Get notified when new episodes drop for favorited anime</div>
+              </div>
+              <label class="settings-toggle" aria-label="Enable episode alerts">
+                <input type="checkbox" id="settingsNotifsEnabled" checked>
+                <span class="settings-toggle__track"></span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group__label">Notification History</div>
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Clear Notification History</div>
+                <div class="settings-row__desc">Remove all stored episode update notifications</div>
+              </div>
+              <button class="btn btn--sm btn--outline" id="settingsClearNotifs">Clear</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Playback ───────────────────────────────────────────── -->
+        <section class="settings-section settings-section--hidden" id="settings-section-playback">
+          <div class="settings-section__header">
+            <h2>Playback</h2>
+            <p>Customize your video player preferences</p>
+          </div>
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Default Volume</div>
+                <div class="settings-row__desc">Starting volume level for the video player</div>
+              </div>
+              <div class="settings-row__control">
+                <input type="range" class="settings-slider" id="settingsVolume" min="0" max="1" step="0.05" value="1">
+                <span class="settings-slider__val" id="settingsVolumeVal">100%</span>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Playback Speed</div>
+                <div class="settings-row__desc">Default video playback rate</div>
+              </div>
+              <select class="settings-select" id="settingsSpeed">
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1" selected>1× (Normal)</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+                <option value="2">2×</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Data & Storage ─────────────────────────────────────── -->
+        <section class="settings-section settings-section--hidden" id="settings-section-data">
+          <div class="settings-section__header">
+            <h2>Data &amp; Storage</h2>
+            <p>Manage your local and cloud data</p>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group__label">Cache</div>
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Episode Update Cache</div>
+                <div class="settings-row__desc">Cached episode data used to detect new releases (auto-refreshes every 6 hours)</div>
+              </div>
+              <button class="btn btn--sm btn--outline" id="settingsClearEpCache">Clear</button>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group__label">History</div>
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Watch History</div>
+                <div class="settings-row__desc">All episodes watched, including progress timestamps</div>
+              </div>
+              <button class="btn btn--sm btn--danger" id="settingsClearHistory">Clear All</button>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group__label">Export</div>
+            <div class="settings-row">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Export Vault Data</div>
+                <div class="settings-row__desc">Download all favorites and watch history as a JSON file</div>
+              </div>
+              <button class="btn btn--sm btn--outline" id="settingsExportData">Export</button>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-group__label">Cloud Sync</div>
+            <div class="settings-sync-status" id="settingsSyncStatus">
+              <span class="settings-sync-status__dot"></span>
+              <span>Loading…</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Account ────────────────────────────────────────────── -->
+        <section class="settings-section settings-section--hidden" id="settings-section-account">
+          <div class="settings-section__header">
+            <h2>Account</h2>
+            <p>Manage your AniVault account and sync</p>
+          </div>
+          <div class="settings-group" id="settingsAccountLoggedIn" style="display:none">
+            <div class="settings-account-card">
+              <div class="settings-account-card__avatar" id="settingsAvatar"></div>
+              <div class="settings-account-card__info">
+                <div class="settings-account-card__email" id="settingsEmail"></div>
+                <div class="settings-account-card__sync">Favorites, history &amp; settings synced to cloud</div>
+              </div>
+            </div>
+            <div class="settings-row" style="margin-top: 16px">
+              <div class="settings-row__info">
+                <div class="settings-row__label">Sign Out</div>
+                <div class="settings-row__desc">Sign out of your AniVault account on this device</div>
+              </div>
+              <button class="btn btn--sm btn--danger" id="settingsSignOut">Sign Out</button>
+            </div>
+          </div>
+          <div class="settings-group" id="settingsAccountLoggedOut">
+            <div class="settings-signin-prompt">
+              <div class="settings-signin-prompt__icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </div>
+              <p>Sign in to sync your settings, favorites, and watch history across all devices.</p>
+              <button class="btn btn--primary" id="settingsSignInBtn">Sign In to AniVault</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
   <!-- ─── Back to Top ──────────────────────────────────────────────── -->
   <button class="back-to-top" id="backToTop" aria-label="Back to top">↑</button>
 
@@ -279,8 +611,12 @@
     </div>
   </footer>
 
-  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"
+    integrity="sha384-5sFtjkYC6dakcOUFuxVZ++Jv0U/CI+tM55PY+p/wi9vBpjvgY8/FTbDb5DRFMdqb"
+    crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"
+    integrity="sha384-5E8B0pTlZZJMabWpC0fyYf6OUpe15jJij34BqBAh4NXoHAlLNOjCPRrwtOXOQFAn"
+    crossorigin="anonymous"></script>
   <script type="module" src="/js/app.js"></script>
 </body>
 

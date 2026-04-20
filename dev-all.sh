@@ -58,4 +58,14 @@ FRONTEND_PID=$!
 
 echo "$CONSUMET_PID $FRONTEND_PID" > "$PIDFILE"
 
+# Display local network IP for same-WiFi access
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+echo -e "\033[1;32m  Frontend :\033[0m http://${LOCAL_IP}:3000"
+echo -e "\033[1;36m  Consumet :\033[0m http://${LOCAL_IP}:3001"
+echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+echo -e "\033[90m  Use the above URLs on other devices in the same WiFi.\033[0m"
+echo ""
+
 wait "$CONSUMET_PID" "$FRONTEND_PID"

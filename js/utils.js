@@ -92,6 +92,62 @@ export function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
+// ─── Loading Manager ──────────────────────────────────────────────────────────
+let _loadingCount = 0;
+let _loadingBar = null;
+
+function _ensureLoadingBar() {
+    if (!_loadingBar) {
+        _loadingBar = document.createElement('div');
+        _loadingBar.id = 'globalLoadingBar';
+        _loadingBar.className = 'loading-bar';
+        document.body.prepend(_loadingBar);
+    }
+    return _loadingBar;
+}
+
+function _loadingStart() {
+    _loadingCount++;
+    _ensureLoadingBar().classList.add('loading-bar--active');
+}
+
+function _loadingEnd() {
+    _loadingCount = Math.max(0, _loadingCount - 1);
+    if (_loadingCount === 0) _loadingBar?.classList.remove('loading-bar--active');
+}
+
+/**
+ * Run `fn` with a loading indicator. Guaranteed to release on error.
+ * @param {string|Element|null} scopeEl - Container whose interactive children get disabled.
+ *   Pass null for global bar only. Multiple concurrent calls on the same scope are ref-counted.
+ * @param {() => Promise} fn
+ */
+export async function withLoading(scopeEl, fn) {
+    _loadingStart();
+    const scope = scopeEl
+        ? (typeof scopeEl === 'string' ? document.querySelector(scopeEl) : scopeEl)
+        : null;
+    if (scope) {
+        const n = parseInt(scope.dataset.loadingCount || '0') + 1;
+        scope.dataset.loadingCount = n;
+        scope.setAttribute('data-loading', '');
+    }
+    try {
+        return await fn();
+    } finally {
+        _loadingEnd();
+        if (scope) {
+            const n = Math.max(0, parseInt(scope.dataset.loadingCount || '1') - 1);
+            if (n === 0) {
+                delete scope.dataset.loadingCount;
+                scope.removeAttribute('data-loading');
+            } else {
+                scope.dataset.loadingCount = n;
+            }
+        }
+    }
+}
+
 /** Generate a simple unique ID */
 let _uid = 0;
 export function uid(prefix = 'id') {
@@ -111,10 +167,26 @@ export function showToast(message, type = 'info', duration = 3000) {
         document.body.appendChild(container);
     }
 
+    const icons = { success: '✓', warning: '⚠', error: '✕', info: 'ℹ' };
+
     const toast = document.createElement('div');
     toast.className = `toast${type !== 'info' ? ` toast--${type}` : ''}`;
-    toast.textContent = message;
+
+    const icon = document.createElement('span');
+    icon.className = 'toast__icon';
+    icon.textContent = icons[type] || icons.info;
+    toast.appendChild(icon);
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
     container.appendChild(toast);
+
+    // Haptic for important toasts
+    if ((type === 'error' || type === 'warning') && navigator.vibrate) {
+        navigator.vibrate(type === 'error' ? [30, 20, 30] : [20]);
+    }
 
     setTimeout(() => {
         toast.classList.add('toast--out');

@@ -2,11 +2,11 @@
  * app.js — Router, page controllers, initialization
  */
 
-import { $, $$, debounce, showToast, el } from './utils.js';
+import { $, $$, debounce, showToast, el, withLoading } from './utils.js';
 import * as api from './api.js';
 import * as streaming from './streaming.js';
 import * as db from './db.js';
-import { CONSUMET_API_BASE } from './config.js';
+import { CONSUMET_API_BASE, CONSUMET_ENV } from './config.js';
 import * as downloader from './downloader.js';
 import { checkFavoritesForUpdates, getOngoingBroadcasts, nextEpisodeMs, formatCountdown } from './updates.js';
 import {
@@ -20,6 +20,8 @@ import {
     createVideoPlayer, createHistoryCard,
     createWatchDetails, createWatchComments,
 } from './components.js';
+import * as auth from './auth.js';
+import * as sync from './sync.js';
 
 // ─── State ───────────────────────────────────────────────────────────
 const state = {
@@ -55,6 +57,9 @@ const state = {
 
 // ─── Countdown timer ─────────────────────────────────────────────────
 let _countdownTimer = null;
+let _player = null;
+let _settingsSyncTimer = null;
+let _hls = null;
 
 function stopCountdownTimer() {
     if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
@@ -89,7 +94,192 @@ function applyCountdownToCard(container, malId, broadcast) {
 }
 
 // ─── Init ────────────────────────────────────────────────────────────
+async function logStartupDiagnostic() {
+    const jikanUrl = 'https://api.jikan.moe/v4';
+    console.group('%c AniVault startup', 'font-weight:bold;color:#6366f1');
+    console.log(`%c Jikan    %c ${jikanUrl}  (REMOTE)`, 'color:#94a3b8', 'color:#e2e8f0');
+    console.log(`%c Consumet %c ${CONSUMET_API_BASE}  (${CONSUMET_ENV})`, 'color:#94a3b8', 'color:#e2e8f0');
+
+    // Ping Consumet
+    const t0 = Date.now();
+    try {
+        const resp = await fetch(`${CONSUMET_API_BASE}/anime/animekai/naruto?page=1`, {
+            signal: AbortSignal.timeout(5000),
+        });
+        const ms = Date.now() - t0;
+        if (resp.ok || resp.status === 404) {
+            console.log(`%c Consumet %c ✓ READY  (${ms}ms)`, 'color:#94a3b8', 'color:#4ade80');
+        } else {
+            console.warn(`%c Consumet %c ✗ HTTP ${resp.status}  (${ms}ms)`, 'color:#94a3b8', 'color:#f87171');
+        }
+    } catch (err) {
+        const ms = Date.now() - t0;
+        const label = err.name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE';
+        console.warn(`%c Consumet %c ✗ ${label}  (${ms}ms) — ${err.message}`, 'color:#94a3b8', 'color:#f87171');
+        console.warn(`         Make sure consumet is running on ${CONSUMET_API_BASE}`);
+    }
+    console.groupEnd();
+}
+
+// ─── Notification Store ───────────────────────────────────────────────
+const NOTIF_KEY = 'anivault_notifs';
+const NOTIF_MAX = 50;
+
+const notifStore = {
+    _load() {
+        try { return JSON.parse(localStorage.getItem(NOTIF_KEY) || '[]'); }
+        catch { return []; }
+    },
+    _save(items) {
+        try { localStorage.setItem(NOTIF_KEY, JSON.stringify(items)); }
+        catch { /* quota */ }
+        scheduleSettingsSync();
+    },
+    add(malId, title, coverImage, update) {
+        const items = this._load();
+        // Dedupe: if same malId + type already unread, just update it
+        const existing = items.find(n => n.malId === malId && n.type === update.type && !n.read);
+        if (existing) {
+            if (update.delta != null) existing.delta = update.delta;
+            existing.ts = Date.now();
+            this._save(items);
+        } else {
+            const notif = { malId, title, coverImage, type: update.type, delta: update.delta ?? null, ts: Date.now(), read: false };
+            items.unshift(notif);
+            this._save(items.slice(0, NOTIF_MAX));
+        }
+        renderNotifBell();
+    },
+    markAllRead() {
+        const items = this._load();
+        items.forEach(n => n.read = true);
+        this._save(items);
+        renderNotifBell();
+    },
+    clear() {
+        this._save([]);
+        renderNotifBell();
+    },
+    getAll() { return this._load(); },
+    unreadCount() { return this._load().filter(n => !n.read).length; },
+    /** Remove all notifications for a specific malId */
+    removeByMalId(malId) {
+        const items = this._load().filter(n => n.malId !== malId);
+        this._save(items);
+        renderNotifBell();
+    },
+    /** Remove notifications whose malId is NOT in the given set of current favorite IDs */
+    pruneStale(currentFavMalIds) {
+        const items = this._load();
+        const pruned = items.filter(n => currentFavMalIds.has(n.malId));
+        if (pruned.length !== items.length) {
+            this._save(pruned);
+            renderNotifBell();
+        }
+    },
+};
+
+/** Remove stale entries from the episode update cache for anime no longer in favorites */
+function pruneUpdateCache(currentFavMalIds) {
+    const CACHE_KEY = 'anivault_ep_updates';
+    try {
+        const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+        let changed = false;
+        for (const malId of Object.keys(cache)) {
+            if (!currentFavMalIds.has(Number(malId))) {
+                delete cache[malId];
+                changed = true;
+            }
+        }
+        if (changed) localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch { /* silent */ }
+}
+
+function renderNotifBell() {
+    const dot   = $('#navBellDot');
+    const list  = $('#notifList');
+    const empty = $('#notifEmpty');
+    if (!dot || !list) return;
+
+    const count = notifStore.unreadCount();
+    dot.classList.toggle('hidden', count === 0);
+
+    const items = notifStore.getAll();
+    list.innerHTML = '';
+
+    if (items.length === 0) {
+        empty?.classList.remove('hidden');
+        return;
+    }
+    empty?.classList.add('hidden');
+
+    items.forEach(n => {
+        const item = el('div', { className: `notif-item${n.read ? '' : ' notif-item--unread'}` });
+
+        if (n.coverImage) {
+            const img = el('img', { className: 'notif-item__thumb', src: n.coverImage, alt: '' });
+            item.appendChild(img);
+        }
+
+        const body = el('div', { className: 'notif-item__body' });
+        body.appendChild(el('div', { className: 'notif-item__title' }, n.title || `MAL #${n.malId}`));
+        const desc = n.type === 'new_episodes'
+            ? `${n.delta} new episode${n.delta > 1 ? 's' : ''} available`
+            : 'New season announced';
+        body.appendChild(el('div', { className: 'notif-item__desc' }, desc));
+        item.appendChild(body);
+
+        const pill = el('span', { className: `notif-item__pill${n.type === 'new_season' ? ' notif-item__pill--season' : ''}` });
+        pill.textContent = n.type === 'new_episodes' ? `+${n.delta} EP` : 'NEW S.';
+        item.appendChild(pill);
+
+        item.addEventListener('click', () => {
+            n.read = true;
+            notifStore._save(notifStore.getAll().map(x => x.malId === n.malId && x.ts === n.ts ? { ...x, read: true } : x));
+            renderNotifBell();
+            closeNotifPanel();
+            showAnimeDetail(n.malId);
+        });
+
+        list.appendChild(item);
+    });
+}
+
+function closeNotifPanel() {
+    $('#notifPanel')?.classList.add('hidden');
+}
+
+function initNotifBell() {
+    const bell  = $('#navBell');
+    const panel = $('#notifPanel');
+    const clear = $('#notifClear');
+    if (!bell || !panel) return;
+
+    renderNotifBell();
+
+    bell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = !panel.classList.contains('hidden');
+        if (isOpen) {
+            closeNotifPanel();
+        } else {
+            panel.classList.remove('hidden');
+            notifStore.markAllRead();
+        }
+    });
+
+    clear?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        notifStore.clear();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!$('#navBellWrap')?.contains(e.target)) closeNotifPanel();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    db.setSyncHooks(sync, auth);
     await db.initCache();
     api.setSfwMode(!state.nsfwEnabled);
     setupNav();
@@ -99,7 +289,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupNsfwToggle();
     setupBackToTop();
     setupKeyboardShortcuts();
+    initNotifBell();
     setupFavoritesListener();
+    setupAuth();
+    setupSettingsPage();
 
     const initialPage = getPageFromPath(location.pathname);
     if (initialPage === 'search') applySearchParamsFromURL();
@@ -112,6 +305,7 @@ function getPageFromPath(path) {
     if (path.startsWith('/search')) return 'search';
     if (path.startsWith('/watch')) return 'watch';
     if (path.startsWith('/vault')) return 'vault';
+    if (path.startsWith('/settings')) return 'settings';
     return 'home';
 }
 
@@ -227,6 +421,7 @@ function navigateTo(page, { pushState = true } = {}) {
     if (page === 'search') loadSearchPage();
     if (page === 'watch') loadWatchPage();
     if (page === 'vault') loadVaultPage();
+    if (page === 'settings') loadSettingsPage();
 
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -236,11 +431,12 @@ function navigateTo(page, { pushState = true } = {}) {
 let homeLoaded = false;
 
 async function loadHomePage() {
-    // Always refresh favorites — may have changed since last visit
-    const favContainer = $('#homeFavorites');
-    if (favContainer) loadFavoritesSection(favContainer);
-
-    if (homeLoaded) return;
+    if (homeLoaded) {
+        // Already loaded — just refresh favorites
+        const favWrap = $('#homeFavoritesWrap');
+        if (favWrap) loadFavoritesSection(favWrap);
+        return;
+    }
 
     const container = $('#homeContent');
     if (!container) return;
@@ -254,50 +450,63 @@ async function loadHomePage() {
 
     const onCardClick = (anime) => showAnimeDetail(anime.mal_id);
 
-    try {
-        // Sequential requests — each one flows through the 350ms rate-limiter
-        // queue so we never burst Jikan's 3 req/sec limit simultaneously.
-        const trending  = await api.getTopAnime('airing');
-        const topRated  = await api.getTopAnime();
-        const completed = await api.searchAnime({ status: 'complete', order_by: 'end_date', sort: 'desc', limit: 15 });
-        const upcoming  = await api.getSeasonUpcoming();
+    await withLoading(container, async () => {
+        try {
+            // Sequential requests — each one flows through the 350ms rate-limiter
+            // queue so we never burst Jikan's 3 req/sec limit simultaneously.
+            const trending  = await api.getTopAnime('airing');
+            const topRated  = await api.getTopAnime();
+            const completed = await api.searchAnime({ status: 'complete', order_by: 'end_date', sort: 'desc', limit: 15 });
+            const upcoming  = await api.getSeasonUpcoming();
 
-        container.innerHTML = '';
+            container.innerHTML = '';
 
-        // Hero banner from first trending anime
-        if (trending.data?.[0]) {
-            container.appendChild(createHeroBanner(trending.data[0], onCardClick));
-        }
+            // Hero banner from first trending anime (rendered first)
+            if (trending.data?.[0]) {
+                container.appendChild(createHeroBanner(trending.data[0], onCardClick));
+            }
 
-        // Carousels
-        if (trending.data?.length) {
-            container.appendChild(createCarousel('🔥 Trending Now', trending.data, onCardClick));
-        }
-        if (topRated.data?.length) {
-            container.appendChild(createCarousel('⭐ Top Rated', topRated.data, onCardClick));
-        }
-        if (completed.data?.length) {
-            container.appendChild(createCarousel('✅ Latest Completed', completed.data, onCardClick));
-        }
-        if (upcoming.data?.length) {
-            container.appendChild(createCarousel('📅 Upcoming', upcoming.data, onCardClick));
-        }
+            // Favorites section — inserted after hero, before other carousels
+            const favWrap = el('div', { id: 'homeFavoritesWrap' });
+            container.appendChild(favWrap);
+            loadFavoritesSection(favWrap);
 
-        homeLoaded = true;
+            // Carousels
+            if (trending.data?.length) {
+                container.appendChild(createCarousel('🔥 Trending Now', trending.data, onCardClick));
+            }
+            if (topRated.data?.length) {
+                container.appendChild(createCarousel('⭐ Top Rated', topRated.data, onCardClick));
+            }
+            if (completed.data?.length) {
+                container.appendChild(createCarousel('✅ Latest Completed', completed.data, onCardClick));
+            }
+            if (upcoming.data?.length) {
+                container.appendChild(createCarousel('📅 Upcoming', upcoming.data, onCardClick));
+            }
 
-    } catch (err) {
-        console.error('[Home]', err);
-        container.innerHTML = '';
-        container.appendChild(createErrorCard(
-            `Failed to load homepage: ${err.message}`,
-            () => { homeLoaded = false; loadHomePage(); }
-        ));
-    }
+            homeLoaded = true;
+
+        } catch (err) {
+            console.error('[Home]', err);
+            container.innerHTML = '';
+            container.appendChild(createErrorCard(
+                `Failed to load homepage: ${err.message}`,
+                () => { homeLoaded = false; loadHomePage(); }
+            ));
+        }
+    });
 }
 
 async function loadFavoritesSection(container) {
     const favs = await db.favorites.getAll();
     container.innerHTML = '';
+
+    // Prune stale notifications & update cache for anime no longer in favorites
+    const currentFavIds = new Set(favs.map(f => f.mal_id));
+    notifStore.pruneStale(currentFavIds);
+    pruneUpdateCache(currentFavIds);
+
     if (favs.length === 0) return;
 
     const onCardClick = (anime) => showAnimeDetail(anime.mal_id);
@@ -312,7 +521,7 @@ async function loadFavoritesSection(container) {
 
     // Background update checks — non-blocking, never throws
     checkFavoritesForUpdates(favs, (malId, update, broadcast) => {
-        // Update badge
+        // Card badge
         if (update) {
             const card = container.querySelector(`[data-mal-id="${malId}"]`);
             if (card) {
@@ -324,6 +533,9 @@ async function loadFavoritesSection(container) {
                     wrap.appendChild(badge);
                 }
             }
+            // Navbar notification
+            const fav = favs.find(f => f.mal_id === malId);
+            notifStore.add(malId, fav?.title_english || fav?.title || null, fav?.images?.jpg?.image_url || null, update);
         }
         // Countdown (fresh broadcast data from this check)
         if (broadcast) applyCountdownToCard(container, malId, broadcast);
@@ -332,8 +544,23 @@ async function loadFavoritesSection(container) {
 
 function setupFavoritesListener() {
     document.addEventListener('favoritesUpdated', () => {
-        const favContainer = $('#homeFavorites');
+        const favContainer = $('#homeFavoritesWrap');
         if (favContainer) loadFavoritesSection(favContainer);
+    });
+
+    // When a specific favorite is removed, clean up its notifications immediately
+    document.addEventListener('favoriteRemoved', (e) => {
+        const malId = e.detail?.malId;
+        if (malId) {
+            notifStore.removeByMalId(malId);
+            // Also remove from update cache
+            try {
+                const CACHE_KEY = 'anivault_ep_updates';
+                const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+                delete cache[malId];
+                localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+            } catch { /* silent */ }
+        }
     });
 }
 
@@ -468,9 +695,10 @@ async function initSearchFilters() {
         });
     }
 
-    // Quick-filter: Top Rated
+    // Quick-filter: Top Rated (18+) — NSFW only
     const quickTopRated = $('#quickTopRated');
     if (quickTopRated) {
+        quickTopRated.style.display = state.nsfwEnabled ? '' : 'none';
         quickTopRated.addEventListener('click', () => {
             applyQuickFilter({
                 status: '',
@@ -478,8 +706,8 @@ async function initSearchFilters() {
                 sort: 'desc',
                 query: '',
                 type: '',
-                rating: '',
-                min_score: '8',
+                rating: 'rx',
+                min_score: '',
                 max_score: '',
             });
         });
@@ -566,9 +794,14 @@ function setupNsfwToggle() {
         state.nsfwEnabled = toggle.checked;
         localStorage.setItem('anivault_nsfw', JSON.stringify(state.nsfwEnabled));
         api.setSfwMode(!state.nsfwEnabled);
+        const _settingsNsfwToggle = $('#settingsNsfwToggle');
+        if (_settingsNsfwToggle) _settingsNsfwToggle.checked = state.nsfwEnabled;
+        scheduleSettingsSync();
 
-        // Show/hide rx rating option
+        // Show/hide rx rating option and Top Rated (18+) quick filter
         if (rxOption) rxOption.style.display = state.nsfwEnabled ? '' : 'none';
+        const _qTopRated = $('#quickTopRated');
+        if (_qTopRated) _qTopRated.style.display = state.nsfwEnabled ? '' : 'none';
 
         // If rx was selected and we're going SFW, reset rating filter
         if (!state.nsfwEnabled && state.search.rating === 'rx') {
@@ -656,7 +889,6 @@ function syncFilterUI() {
 
 async function performSearch(append = false) {
     if (state.search.loading) return;
-    state.search.loading = true;
 
     const resultsContainer = $('#searchResults');
     const paginationContainer = $('#searchPagination');
@@ -665,15 +897,10 @@ async function performSearch(append = false) {
     if (!append) {
         showSkeletons(resultsContainer, 12);
         if (paginationContainer) paginationContainer.innerHTML = '';
-
-        // Auto-close filter panel on mobile when searching
-        const filterPanel = $('#filterPanel');
-        const filterToggle = $('#filterToggle');
-        if (filterPanel && filterPanel.classList.contains('filter-panel--open')) {
-            filterPanel.classList.remove('filter-panel--open');
-            if (filterToggle) filterToggle.classList.remove('active');
-        }
     }
+
+    await withLoading('#page-search', async () => {
+    state.search.loading = true;
 
     const s = state.search;
 
@@ -761,38 +988,33 @@ async function performSearch(append = false) {
             }, 100);
         }
     }
+    }); // withLoading
 }
 
 // ─── Anime Detail ────────────────────────────────────────────────────
 async function showAnimeDetail(malId) {
     // Show loading modal
-    openDetailModal({
-        title: 'Loading...',
-        images: {},
-        synopsis: 'Fetching anime details...',
-        genres: [],
-        themes: [],
-        demographics: [],
-        studios: [],
-    });
+    openDetailModal({}, [], true);
 
-    try {
-        const [animeData, recsData] = await Promise.all([
-            api.getAnimeById(malId),
-            api.getAnimeRecommendations(malId).catch(() => ({ data: [] })),
-        ]);
+    await withLoading(null, async () => {
+        try {
+            const [animeData, recsData] = await Promise.all([
+                api.getAnimeById(malId),
+                api.getAnimeRecommendations(malId).catch(() => ({ data: [] })),
+            ]);
 
-        openDetailModal(animeData.data, recsData.data || []);
-    } catch (err) {
-        console.error('[Detail]', err);
-        closeDetailModal();
-        const container = $(`#page-${state.currentPage} .page__content`) || $(`#page-${state.currentPage}`);
-        if (container) {
-            const errCard = createErrorCard(`Failed to load anime details: ${err.message}`);
-            container.prepend(errCard);
-            setTimeout(() => errCard.remove(), 5000);
+            openDetailModal(animeData.data, recsData.data || []);
+        } catch (err) {
+            console.error('[Detail]', err);
+            closeDetailModal();
+            const container = $(`#page-${state.currentPage} .page__content`) || $(`#page-${state.currentPage}`);
+            if (container) {
+                const errCard = createErrorCard(`Failed to load anime details: ${err.message}`);
+                container.prepend(errCard);
+                setTimeout(() => errCard.remove(), 5000);
+            }
         }
-    }
+    });
 }
 
 // Custom event for detail from within components
@@ -1030,47 +1252,49 @@ async function performWatchSearch(query, autoSelect = false, altQuery = '') {
     if (animeInfo) animeInfo.style.display = 'none';
     resultsContainer.innerHTML = '<p class="loading-text">Searching...</p>';
 
-    try {
-        // Strip subtitle and season indicators to get a broad base title for AnimeKai search.
-        // Use whichever of query/altQuery contains season info, so we strip the right thing.
-        // Keep the original query (and altQuery) for findBestMatch season discrimination.
-        const stripSeason = (s) => s
-            .replace(/[:：].*/g, '')
-            .replace(/\s*\d+(?:st|nd|rd|th)?\s*season/gi, '')
-            .replace(/\s*season\s*\d+/gi, '')
-            .replace(/\s+\b(IV|IX|VI{0,3}|XI{0,2}|I{1,3}|V|X)\b\s*$/i, '')
-            .trim();
-        const sourceForBase = (altQuery && extractSeason(altQuery) != null && extractSeason(query) == null)
-            ? altQuery : query;
-        const baseQuery = autoSelect ? (stripSeason(sourceForBase) || query) : query;
-        const data = await streaming.searchAnimekai(baseQuery);
-        resultsContainer.innerHTML = '';
+    await withLoading(resultsContainer, async () => {
+        try {
+            // Strip subtitle and season indicators to get a broad base title for AnimeKai search.
+            // Use whichever of query/altQuery contains season info, so we strip the right thing.
+            // Keep the original query (and altQuery) for findBestMatch season discrimination.
+            const stripSeason = (s) => s
+                .replace(/[:：].*/g, '')
+                .replace(/\s*\d+(?:st|nd|rd|th)?\s*season/gi, '')
+                .replace(/\s*season\s*\d+/gi, '')
+                .replace(/\s+\b(IV|IX|VI{0,3}|XI{0,2}|I{1,3}|V|X)\b\s*$/i, '')
+                .trim();
+            const sourceForBase = (altQuery && extractSeason(altQuery) != null && extractSeason(query) == null)
+                ? altQuery : query;
+            const baseQuery = autoSelect ? (stripSeason(sourceForBase) || query) : query;
+            const data = await streaming.searchAnimekai(baseQuery);
+            resultsContainer.innerHTML = '';
 
-        if (!data.results || data.results.length === 0) {
-            resultsContainer.appendChild(createEmptyState('No anime found on AnimeKai'));
-            return;
-        }
-
-        // Auto-select: find best match and skip the search results UI
-        if (autoSelect) {
-            const bestMatch = findBestMatch(query, data.results, altQuery);
-            if (bestMatch) {
-                await selectWatchAnime(bestMatch, true);
+            if (!data.results || data.results.length === 0) {
+                resultsContainer.appendChild(createEmptyState('No anime found on AnimeKai'));
                 return;
             }
-        }
 
-        for (const anime of data.results) {
-            resultsContainer.appendChild(createWatchSearchItem(anime, selectWatchAnime));
+            // Auto-select: find best match and skip the search results UI
+            if (autoSelect) {
+                const bestMatch = findBestMatch(query, data.results, altQuery);
+                if (bestMatch) {
+                    await selectWatchAnime(bestMatch, true);
+                    return;
+                }
+            }
+
+            for (const anime of data.results) {
+                resultsContainer.appendChild(createWatchSearchItem(anime, selectWatchAnime));
+            }
+        } catch (err) {
+            console.error('[Watch Search]', err);
+            resultsContainer.innerHTML = '';
+            resultsContainer.appendChild(createErrorCard(
+                `Search failed: ${err.message}`,
+                () => performWatchSearch(query, autoSelect),
+            ));
         }
-    } catch (err) {
-        console.error('[Watch Search]', err);
-        resultsContainer.innerHTML = '';
-        resultsContainer.appendChild(createErrorCard(
-            `Search failed: ${err.message}`,
-            () => performWatchSearch(query, autoSelect),
-        ));
-    }
+    });
 }
 
 /**
@@ -1137,12 +1361,6 @@ async function selectWatchAnime(anime, keepState = false) {
 
     updateWatchURL();
 
-    // Smart language: default to sub, only allow dub if available
-    const hasDub = anime.subOrDub === 'dub' || anime.subOrDub === 'both';
-    if (!hasDub && state.watch.language === 'dub') {
-        state.watch.language = 'sub';
-    }
-
     // Hide search results, show anime info
     const resultsContainer = $('#watchSearchResults');
     if (resultsContainer) resultsContainer.innerHTML = '';
@@ -1158,28 +1376,30 @@ async function loadEpisodes(animeId) {
 
     episodeList.innerHTML = '<p class="loading-text">Loading episodes...</p>';
 
-    try {
-        const data = await streaming.getAnimekaiInfo(animeId);
-        state.watch.episodes = data.episodes || [];
+    await withLoading('#watchSidebar', async () => {
+        try {
+            const data = await streaming.getAnimekaiInfo(animeId);
+            state.watch.episodes = data.episodes || [];
 
-        renderEpisodeList();
-        updateDownloadButtons();
+            renderEpisodeList();
+            updateDownloadButtons();
 
-        // Auto-play first episode if none selected yet
-        if (!state.watch.currentEpId && state.watch.episodes.length > 0) {
-            selectEpisode(state.watch.episodes[0]);
-        } else if (state.watch.currentEpId && state.watch.episodes.length > 0) {
-            const ep = state.watch.episodes.find(e => e.id === state.watch.currentEpId) || state.watch.episodes[0];
-            selectEpisode(ep);
+            // Auto-play first episode if none selected yet
+            if (!state.watch.currentEpId && state.watch.episodes.length > 0) {
+                selectEpisode(state.watch.episodes[0]);
+            } else if (state.watch.currentEpId && state.watch.episodes.length > 0) {
+                const ep = state.watch.episodes.find(e => e.id === state.watch.currentEpId) || state.watch.episodes[0];
+                selectEpisode(ep);
+            }
+        } catch (err) {
+            console.error('[Watch Episodes]', err);
+            episodeList.innerHTML = '';
+            episodeList.appendChild(createErrorCard(
+                `Failed to load episodes: ${err.message}`,
+                () => loadEpisodes(animeId),
+            ));
         }
-    } catch (err) {
-        console.error('[Watch Episodes]', err);
-        episodeList.innerHTML = '';
-        episodeList.appendChild(createErrorCard(
-            `Failed to load episodes: ${err.message}`,
-            () => loadEpisodes(animeId),
-        ));
-    }
+    });
 }
 
 function renderWatchSidebar() {
@@ -1208,10 +1428,13 @@ function updateLangToggle() {
     const anime = state.watch.selectedAnime;
     let hasDub = anime?.subOrDub === 'dub' || anime?.subOrDub === 'both';
 
-    if (state.watch.currentEpId && state.watch.episodes?.length) {
-        const currentEp = state.watch.episodes.find(e => e.id === state.watch.currentEpId);
-        if (currentEp && currentEp.isDubbed === false) {
-            hasDub = false;
+    if (state.watch.episodes?.length) {
+        // Any episode dubbed → show has dub (more reliable than search result's subOrDub)
+        if (state.watch.episodes.some(e => e.isDubbed)) hasDub = true;
+        // But disable for current episode if it specifically lacks dub
+        if (state.watch.currentEpId) {
+            const currentEp = state.watch.episodes.find(e => e.id === state.watch.currentEpId);
+            if (currentEp && currentEp.isDubbed === false) hasDub = false;
         }
     }
 
@@ -1266,6 +1489,9 @@ async function renderPlayer() {
     const container = $('#playerContainer');
     if (!container) return;
 
+    if (_hls) { _hls.destroy(); _hls = null; }
+    if (_player) { _player.destroy(); _player = null; }
+
     container.innerHTML = '';
 
     if (!state.watch.currentEpId) {
@@ -1290,6 +1516,7 @@ async function renderPlayer() {
         </div>
     `;
 
+    await withLoading('#watchSidebar', async () => {
     try {
         const isDub = state.watch.language === 'dub';
         const data = await streaming.getEpisodeSources(state.watch.currentEpId, isDub);
@@ -1320,6 +1547,7 @@ async function renderPlayer() {
             storage: { enabled: true, key: 'anivault_plyr' },
             autoplay: true
         });
+        _player = player;
 
         // Setup Skip Intro / Skip Outro Buttons
         const intro = data.intro || undefined;
@@ -1360,6 +1588,23 @@ async function renderPlayer() {
             }
         });
 
+        // Initialize HLS after Plyr is fully ready to avoid video.load() race
+        player.on('ready', () => {
+            if (video.dataset.hlsSrc) {
+                const proxyUrl = `${CONSUMET_API_BASE}/utils/cors?url=${encodeURIComponent(video.dataset.hlsSrc)}`;
+                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    _hls = new Hls();
+                    const hls = _hls;
+                    hls.loadSource(proxyUrl);
+                    hls.attachMedia(video);
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    // Native HLS (Safari / iOS)
+                    video.src = proxyUrl;
+                    video.load();
+                }
+            }
+        });
+
         player.on('loadeddata', () => {
             if (state.watch.resumeTime > 0) {
                 player.currentTime = state.watch.resumeTime;
@@ -1374,7 +1619,7 @@ async function renderPlayer() {
             if (anime && ep && video.duration) {
                 db.history.save({
                     id: anime.id,
-                    title: anime.title || anime.title_english,
+                    title: anime.jikan_title || anime.title || anime.title_english,
                     image: anime.image,
                     score: anime.score || null,
                     type: anime.type || null,
@@ -1428,20 +1673,6 @@ async function renderPlayer() {
             }
         });
 
-        // Initialize HLS.js for m3u8 sources
-        if (video.dataset.hlsSrc) {
-            // Proxy the m3u8 through the backend to bypass strict Origin 403s on Cloudflare
-            const proxyUrl = `${CONSUMET_API_BASE}/utils/cors?url=${encodeURIComponent(video.dataset.hlsSrc)}`;
-            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-                const hls = new Hls();
-                hls.loadSource(proxyUrl);
-                hls.attachMedia(video);
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                // Native HLS (Safari)
-                video.src = proxyUrl;
-            }
-        }
-
         // Render Details and Comments
         const detailsContainer = $('#watchDetails');
         const commentsContainer = $('#watchComments');
@@ -1465,6 +1696,7 @@ async function renderPlayer() {
                             const jikanData = searchRes.data[0];
                             malId = jikanData.mal_id;
                             state.watch.selectedAnime.mal_id = malId;
+                            state.watch.selectedAnime.jikan_title = jikanData.title;
                             state.watch.selectedAnime.score = jikanData.score;
                             state.watch.selectedAnime.type = jikanData.type;
                             state.watch.selectedAnime.status = jikanData.status;
@@ -1511,6 +1743,7 @@ async function renderPlayer() {
             () => renderPlayer(),
         ));
     }
+    }); // withLoading
 
     renderEpisodeNav();
 }
@@ -1542,7 +1775,7 @@ function renderEpisodeNav() {
         const prevEp = episodes[currentIdx - 1];
         const prevBtn = document.createElement('button');
         prevBtn.className = 'btn btn--outline episode-nav__btn';
-        prevBtn.innerHTML = `← Ep ${prevEp.number}`;
+        prevBtn.textContent = `← Ep ${prevEp.number}`;
         prevBtn.title = prevEp.title || `Episode ${prevEp.number}`;
         prevBtn.addEventListener('click', () => selectEpisode(prevEp));
         nav.appendChild(prevBtn);
@@ -1562,7 +1795,7 @@ function renderEpisodeNav() {
         const nextEp = episodes[currentIdx + 1];
         const nextBtn = document.createElement('button');
         nextBtn.className = 'btn btn--outline episode-nav__btn';
-        nextBtn.innerHTML = `Ep ${nextEp.number} →`;
+        nextBtn.textContent = `Ep ${nextEp.number} →`;
         nextBtn.title = nextEp.title || `Episode ${nextEp.number}`;
         nextBtn.addEventListener('click', () => selectEpisode(nextEp));
         nav.appendChild(nextBtn);
@@ -1642,6 +1875,7 @@ async function loadVaultPage() {
     histContainer.appendChild(createCarouselSkeleton('⏱ Continue Watching'));
     favContainer.appendChild(createCarouselSkeleton('❤ Favorites'));
 
+    await withLoading('#page-vault', async () => {
     try {
         const [histData, favData] = await Promise.all([
             db.history.getAll(),
@@ -1688,6 +1922,7 @@ async function loadVaultPage() {
                             const favRecord = favTitleMap.get(t);
                             if (favRecord) {
                                 await db.favorites.remove(favRecord.mal_id);
+                                showToast('Removed from favorites', 'info', 2000);
                                 document.dispatchEvent(new CustomEvent('favoritesUpdated'));
                                 loadVaultPage();
                             }
@@ -1695,15 +1930,18 @@ async function loadVaultPage() {
                             const res = await api.searchAnime({ q: entry.anime_title, limit: 1 });
                             if (res.data && res.data[0]) {
                                 await db.favorites.add(res.data[0]);
+                                showToast('Added to favorites', 'success', 2000);
                                 document.dispatchEvent(new CustomEvent('favoritesUpdated'));
                                 loadVaultPage();
                             } else {
                                 btn.textContent = '♡';
                                 btn.title = 'Not found on Jikan';
+                                showToast('Could not find anime on Jikan', 'warning', 3000);
                             }
                         }
                     } catch (err) {
                         btn.textContent = wasFav ? '♥' : '♡';
+                        showToast('Something went wrong', 'error', 2500);
                     }
                 }));
             }
@@ -1737,6 +1975,7 @@ async function loadVaultPage() {
         favContainer.innerHTML = '';
         histContainer.appendChild(createErrorCard(`Failed to load vault: ${err.message}`, loadVaultPage));
     }
+    }); // withLoading
 }
 
 
@@ -1928,3 +2167,732 @@ function closeBatchModal() {
         setTimeout(() => { modal.remove(); document.body.classList.remove('modal-open'); }, 300);
     }
 }
+
+// ─── Auth ─────────────────────────────────────────────────────────────────
+
+// Supabase v2 fires INITIAL_SESSION then SIGNED_IN on page reload.
+// This flag prevents the duplicate SIGNED_IN from re-showing the banner.
+let _initialSessionHandled = false;
+
+function setupAuth() {
+    if (!auth.isConfigured()) return;
+
+    auth.onAuthChange(async (event, session) => {
+        renderAuthNav(session?.user ?? null);
+
+        if (event === 'SIGNED_IN') {
+            // Skip if INITIAL_SESSION already handled this reload
+            if (_initialSessionHandled) {
+                _initialSessionHandled = false;
+                return;
+            }
+            closeAuthModal();
+            await handlePostLogin(true);
+        }
+
+        if (event === 'INITIAL_SESSION' && session?.user) {
+            _initialSessionHandled = true;
+            // Existing session on page reload — purge stale user data, sync silently
+            try {
+                await db.clearOtherUserData(session.user.id);
+                await db.syncCloudToLocal();
+                const cloudSettings = await sync.fetchCloudSettings();
+                applyCloudSettings(cloudSettings);
+                homeLoaded = false;
+                if (state.currentPage === 'home') loadHomePage();
+                if (state.currentPage === 'vault') loadVaultPage();
+                if (state.currentPage === 'settings') loadSettingsPage();
+            } catch (err) {
+                console.error('[auth] initial sync failed:', err);
+            }
+        }
+
+        if (event === 'SIGNED_OUT') {
+            await db.flushSync();
+            await db.clearCloudData();
+            localStorage.clear();
+            location.reload();
+            return;
+        }
+    });
+
+    auth.initAuth();
+    setupAuthModal();
+    setupAuthNav();
+}
+
+function renderAuthNav(user) {
+    const loginBtn = $('#navLoginBtn');
+    const userArea = $('#navUser');
+    const avatar = $('#navAvatar');
+    const emailEl = $('#navUserEmail');
+
+    if (user) {
+        if (loginBtn) loginBtn.style.display = 'none';
+        if (userArea) userArea.style.display = '';
+        if (avatar) avatar.textContent = (user.email || '?').slice(0, 2).toUpperCase();
+        if (emailEl) emailEl.textContent = user.email || '';
+    } else {
+        if (loginBtn) loginBtn.style.display = '';
+        if (userArea) userArea.style.display = 'none';
+    }
+}
+
+function setupAuthNav() {
+    $('#navLoginBtn')?.addEventListener('click', openAuthModal);
+
+    $('#navAvatar')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = $('#navUserMenu');
+        menu?.classList.toggle('hidden');
+    });
+
+    $('#navSignOut')?.addEventListener('click', async () => {
+        $('#navUserMenu')?.classList.add('hidden');
+        await auth.signOut();
+        showToast('Signed out', 'info');
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!$('#navUser')?.contains(e.target)) {
+            $('#navUserMenu')?.classList.add('hidden');
+        }
+    });
+}
+
+let _authMode = 'signin'; // 'signin' | 'signup'
+let _authFailCount = 0;
+let _authCooldownUntil = 0;
+let _authFormOpenedAt = 0;
+
+function openAuthModal() {
+    const modal = $('#authModal');
+    if (!modal) return;
+    _authMode = 'signin';
+    _authFormOpenedAt = Date.now();
+    syncAuthModalMode();
+    modal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    requestAnimationFrame(() => modal.classList.add('modal-overlay--visible'));
+    setTimeout(() => $('#authEmail')?.focus(), 100);
+}
+
+function closeAuthModal() {
+    const modal = $('#authModal');
+    if (!modal) return;
+    modal.classList.remove('modal-overlay--visible');
+    setTimeout(() => {
+        modal.classList.add('hidden');
+        document.body.classList.remove('modal-open');
+        const errEl = $('#authError');
+        if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+    }, 300);
+}
+
+function syncAuthModalMode() {
+    const isSignup = _authMode === 'signup';
+    const titleEl = $('#authModalTitle');
+    const subtitleEl = $('#authModalSubtitle');
+    const submitBtn = $('#authSubmitBtn');
+    const toggleMsg = $('#authToggleMsg');
+    const toggleBtn = $('#authToggleBtn');
+    const pwInput = $('#authPassword');
+    const strengthWrap = $('#authStrengthWrap');
+    const confirmScreen = $('#authConfirmScreen');
+    const form = $('#authForm');
+    const toggleWrap = $('#authToggleWrap');
+
+    if (titleEl) titleEl.textContent = isSignup ? 'Create your account' : 'Welcome back';
+    if (subtitleEl) subtitleEl.textContent = isSignup ? 'Join AniVault and sync your anime' : 'Sign in to sync your vault';
+    if (submitBtn) {
+        submitBtn.textContent = isSignup ? 'Create account' : 'Sign in';
+        submitBtn.classList.remove('auth-modal__submit--loading');
+        submitBtn.disabled = false;
+    }
+    if (toggleMsg) toggleMsg.textContent = isSignup ? 'Already have an account?' : "Don't have an account?";
+    if (toggleBtn) toggleBtn.textContent = isSignup ? 'Sign in' : 'Sign up';
+    if (pwInput) {
+        pwInput.setAttribute('autocomplete', isSignup ? 'new-password' : 'current-password');
+        pwInput.value = '';
+    }
+    if (strengthWrap) strengthWrap.style.display = 'none';
+
+    // Show form, hide confirmation screen
+    if (form) form.style.display = '';
+    if (confirmScreen) confirmScreen.classList.add('hidden');
+    if (toggleWrap) toggleWrap.style.display = '';
+
+    // Clear errors
+    const errEl = $('#authError');
+    if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+}
+
+function setupAuthModal() {
+    $('#authModalClose')?.addEventListener('click', closeAuthModal);
+    $('#authModal')?.addEventListener('click', (e) => {
+        if (e.target === $('#authModal')) closeAuthModal();
+    });
+
+    $('#authToggleBtn')?.addEventListener('click', () => {
+        _authMode = _authMode === 'signin' ? 'signup' : 'signin';
+        syncAuthModalMode();
+        const errEl = $('#authError');
+        if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+    });
+
+    // Password visibility toggle
+    $('#authPwToggle')?.addEventListener('click', () => {
+        const pw = $('#authPassword');
+        if (!pw) return;
+        const show = pw.type === 'password';
+        pw.type = show ? 'text' : 'password';
+        const toggleBtn = $('#authPwToggle');
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            // Swap eye icon
+            toggleBtn.innerHTML = show
+                ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+                : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+        }
+    });
+
+    // Password strength indicator
+    const pwInput = $('#authPassword');
+    if (pwInput) {
+        pwInput.addEventListener('input', () => {
+            if (_authMode !== 'signup') return;
+            const strength = getPasswordStrength(pwInput.value);
+            const bar = $('#authStrengthBar');
+            const label = $('#authStrengthLabel');
+            const container = $('#authStrengthWrap');
+            if (container) container.style.display = pwInput.value ? 'flex' : 'none';
+            if (bar) {
+                bar.style.width = `${strength.percent}%`;
+                bar.className = `auth-strength__bar auth-strength__bar--${strength.level}`;
+            }
+            if (label) {
+                label.textContent = strength.text;
+                label.className = `auth-strength__label auth-strength__label--${strength.level}`;
+            }
+        });
+    }
+
+    // Resend confirmation email
+    $('#authResendBtn')?.addEventListener('click', async () => {
+        const email = _lastSignupEmail;
+        if (!email) return;
+        const btn = $('#authResendBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+        try {
+            await auth.resendConfirmation(email);
+            showToast('Confirmation email resent!', 'success');
+        } catch (err) {
+            showToast('Failed to resend: ' + humanizeAuthError(err), 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Resend confirmation email'; }
+        }
+    });
+
+    // Back to sign-in from confirmation screen
+    $('#authBackToLogin')?.addEventListener('click', () => {
+        _authMode = 'signin';
+        syncAuthModalMode();
+    });
+
+    $('#authForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = $('#authEmail')?.value.trim();
+        const password = $('#authPassword')?.value;
+        if (!email || !password) return;
+
+        // ── Anti-bot: honeypot check ──
+        const honeypot = $('#authWebsite');
+        if (honeypot && honeypot.value) {
+            // Bot filled the hidden field — silently reject
+            console.warn('[auth] Honeypot triggered');
+            return;
+        }
+
+        // ── Anti-bot: timing check (form opened too fast = bot) ──
+        if (_authFormOpenedAt && (Date.now() - _authFormOpenedAt) < 1500) {
+            showAuthError('Please slow down and try again.');
+            return;
+        }
+
+        // ── Rate limiting: cooldown between attempts ──
+        const now = Date.now();
+        if (_authCooldownUntil > now) {
+            const secs = Math.ceil((_authCooldownUntil - now) / 1000);
+            showAuthError(`Too many attempts. Please wait ${secs} second${secs !== 1 ? 's' : ''}.`);
+            return;
+        }
+
+        // ── Progressive lockout after repeated failures ──
+        if (_authFailCount >= 5) {
+            const lockoutMs = Math.min(60000, _authFailCount * 10000); // max 60s
+            _authCooldownUntil = now + lockoutMs;
+            const secs = Math.ceil(lockoutMs / 1000);
+            showAuthError(`Account temporarily locked. Try again in ${secs} seconds.`);
+            _authFailCount = 0; // Reset counter, cooldown enforces the wait
+            return;
+        }
+
+        // Client-side validation
+        if (_authMode === 'signup') {
+            if (password.length < 6) {
+                showAuthError('Password must be at least 6 characters.');
+                return;
+            }
+            const strength = getPasswordStrength(password);
+            if (strength.level === 'weak') {
+                showAuthError('Password is too weak. Add numbers, uppercase letters, or symbols.');
+                return;
+            }
+        }
+
+        const btn = $('#authSubmitBtn');
+        if (btn) {
+            btn.disabled = true;
+            btn.classList.add('auth-modal__submit--loading');
+            btn.dataset.originalText = btn.textContent;
+            btn.textContent = '';
+        }
+
+        // Clear previous errors
+        const errEl = $('#authError');
+        if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+
+        try {
+            if (_authMode === 'signin') {
+                await auth.signInWithEmail(email, password);
+            } else {
+                const data = await auth.signUpWithEmail(email, password);
+                if (!data.session) {
+                    // Email confirmation required — show the confirmation screen
+                    _lastSignupEmail = email;
+                    showConfirmationScreen(email);
+                    resetAuthBtn(btn, 'Create account');
+                    return;
+                }
+            }
+            // Success — reset security counters
+            _authFailCount = 0;
+            _authCooldownUntil = 0;
+        } catch (err) {
+            _authFailCount++;
+            // Enforce a minimum 3s cooldown between attempts
+            _authCooldownUntil = Date.now() + 3000;
+            const friendly = humanizeAuthError(err);
+            showAuthError(friendly);
+            resetAuthBtn(btn, _authMode === 'signin' ? 'Sign in' : 'Create account');
+        }
+    });
+}
+
+let _lastSignupEmail = '';
+
+function showConfirmationScreen(email) {
+    const form = $('#authForm');
+    const confirmScreen = $('#authConfirmScreen');
+    const confirmEmail = $('#authConfirmEmail');
+    const toggleWrap = $('#authToggleWrap');
+    const errEl = $('#authError');
+    const titleEl = $('#authModalTitle');
+    const subtitleEl = $('#authModalSubtitle');
+
+    if (form) form.style.display = 'none';
+    if (toggleWrap) toggleWrap.style.display = 'none';
+    if (errEl) errEl.classList.add('hidden');
+    if (confirmScreen) confirmScreen.classList.remove('hidden');
+    if (confirmEmail) confirmEmail.textContent = email;
+    if (titleEl) titleEl.textContent = 'Almost there!';
+    if (subtitleEl) subtitleEl.textContent = 'One more step to complete your signup';
+}
+
+function resetAuthBtn(btn, text) {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.classList.remove('auth-modal__submit--loading');
+    btn.textContent = text;
+}
+
+/**
+ * Map raw Supabase error messages to user-friendly ones.
+ */
+function humanizeAuthError(err) {
+    const msg = (err?.message || err?.error_description || String(err)).toLowerCase();
+
+    if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials'))
+        return 'Incorrect email or password. Please try again.';
+    if (msg.includes('email not confirmed'))
+        return 'Your email isn\'t confirmed yet. Check your inbox for the confirmation link.';
+    if (msg.includes('user already registered') || msg.includes('already been registered'))
+        return 'An account with this email already exists. Try signing in instead.';
+    if (msg.includes('signup is not allowed') || msg.includes('signups not allowed'))
+        return 'New registrations are currently disabled. Please try later.';
+    if (msg.includes('email rate limit') || msg.includes('rate limit'))
+        return 'Too many attempts. Please wait a few minutes and try again.';
+    if (msg.includes('password') && msg.includes('at least'))
+        return 'Password must be at least 6 characters long.';
+    if (msg.includes('network') || msg.includes('fetch'))
+        return 'Network error. Please check your connection and try again.';
+    if (msg.includes('invalid email'))
+        return 'Please enter a valid email address.';
+
+    // Fallback: capitalize first letter of raw message
+    const raw = err?.message || String(err);
+    return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function getPasswordStrength(pw) {
+    if (!pw) return { percent: 0, level: 'weak', text: '' };
+    let score = 0;
+    if (pw.length >= 6) score++;
+    if (pw.length >= 10) score++;
+    if (/[A-Z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+    if (score <= 1) return { percent: 20, level: 'weak', text: 'Weak' };
+    if (score <= 2) return { percent: 40, level: 'fair', text: 'Fair' };
+    if (score <= 3) return { percent: 65, level: 'good', text: 'Good' };
+    if (score <= 4) return { percent: 85, level: 'strong', text: 'Strong' };
+    return { percent: 100, level: 'excellent', text: 'Excellent' };
+}
+
+function showAuthError(msg) {
+    const errEl = $('#authError');
+    if (!errEl) return;
+    errEl.textContent = msg;
+    errEl.classList.remove('hidden');
+    // Shake animation for emphasis
+    errEl.style.animation = 'none';
+    errEl.offsetHeight;
+    errEl.style.animation = 'authShake 0.4s ease';
+}
+
+async function handlePostLogin(showBanner = false) {
+    const uid = auth.getCurrentUser()?.id;
+
+    // Purge cloud-synced records belonging to a previous user
+    if (uid) await db.clearOtherUserData(uid);
+
+    // Snapshot local-only data BEFORE cloud sync — these are records that
+    // existed before login and are NOT already in the cloud.
+    const [localOnlyFavs, localOnlyHist] = await Promise.all([
+        db.favorites.getLocalOnly(),
+        db.history.getLocalOnly(),
+    ]);
+    const hasLocalOnly = localOnlyFavs.length > 0 || localOnlyHist.length > 0;
+
+    // Sync cloud → local (cloud wins on conflicts)
+    try {
+        await db.syncCloudToLocal();
+    } catch (err) {
+        console.error('[auth] cloud sync failed:', err);
+    }
+
+    // Load cloud settings and apply
+    try {
+        const cloudSettings = await sync.fetchCloudSettings();
+        applyCloudSettings(cloudSettings);
+    } catch (err) {
+        console.error('[auth] settings sync failed:', err);
+    }
+
+    // Reload current page to reflect synced data
+    homeLoaded = false;
+    if (state.currentPage === 'home') loadHomePage();
+    if (state.currentPage === 'vault') loadVaultPage();
+    if (state.currentPage === 'settings') loadSettingsPage();
+
+    // Only show banner for genuinely local-only data, not cloud-synced records
+    // Banner dismiss key is user-scoped so each account has its own state
+    const dismissKey = uid ? `anivault_local_banner_dismissed_${uid}` : 'anivault_local_banner_dismissed';
+    const dismissed = localStorage.getItem(dismissKey);
+    if (showBanner && hasLocalOnly && !dismissed) {
+        showLocalDataBanner(localOnlyFavs.length, localOnlyHist.length, localOnlyFavs, localOnlyHist, dismissKey);
+    }
+
+    showToast(`Signed in as ${auth.getCurrentUser()?.email}`, 'success');
+}
+
+function showLocalDataBanner(favCount, histCount, localFavs, localHist, dismissKey) {
+    const banner = $('#localDataBanner');
+    const msg = $('#localDataMsg');
+    if (!banner || !msg) return;
+
+    const parts = [];
+    if (favCount > 0) parts.push(`${favCount} favorite${favCount !== 1 ? 's' : ''}`);
+    if (histCount > 0) parts.push(`${histCount} history entr${histCount !== 1 ? 'ies' : 'y'}`);
+    msg.textContent = `Local save found: ${parts.join(', ')}`;
+
+    banner.classList.remove('hidden');
+
+    // View Vault — navigate but keep banner visible so Import button remains
+    $('#localDataView')?.addEventListener('click', () => {
+        navigateTo('vault');
+    }, { once: true });
+
+    // Import to cloud — import then hide banner
+    $('#localDataImport')?.addEventListener('click', async () => {
+        const btn = $('#localDataImport');
+        if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+        try {
+            await sync.importLocalToCloud(localFavs, localHist);
+            hideLocalDataBanner();
+            localStorage.removeItem('anivault_local_backup');
+            showToast(`Imported ${parts.join(' and ')} to cloud`, 'success');
+        } catch (err) {
+            showToast('Import failed: ' + err.message, 'error');
+            if (btn) { btn.disabled = false; btn.textContent = 'Import to cloud'; }
+        }
+    }, { once: true });
+
+    // Don't show again — permanently dismiss, backup then delete local data
+    $('#localDataDismiss')?.addEventListener('click', async () => {
+        localStorage.setItem(dismissKey, '1');
+        hideLocalDataBanner();
+        // Backup to localStorage before clearing (safety net)
+        try {
+            const [backupFavs, backupHist] = await Promise.all([
+                db.favorites.getAll(),
+                db.history.getAll(),
+            ]);
+            localStorage.setItem('anivault_local_backup', JSON.stringify({
+                favorites: backupFavs,
+                history: backupHist,
+                backedUpAt: new Date().toISOString(),
+            }));
+        } catch { /* silent — proceed even if backup fails */ }
+        // Clear local IndexedDB data since user chose to discard
+        try {
+            await db.favorites.clear();
+            await db.history.clear();
+        } catch { /* silent */ }
+        showToast('Local data deleted. Banner won\'t appear again.', 'info');
+    }, { once: true });
+}
+
+function hideLocalDataBanner() {
+    $('#localDataBanner')?.classList.add('hidden');
+}
+
+// ─── Settings Sync ────────────────────────────────────────────────────
+
+function scheduleSettingsSync() {
+    clearTimeout(_settingsSyncTimer);
+    _settingsSyncTimer = setTimeout(flushSettingsSync, 2000);
+}
+
+async function flushSettingsSync() {
+    if (!auth.isLoggedIn()) return;
+    try {
+        await sync.syncSettings(buildSettingsPayload());
+    } catch (err) {
+        console.error('[settings] sync failed:', err);
+    }
+}
+
+function buildSettingsPayload() {
+    const safeJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
+    return {
+        nsfw: state.nsfwEnabled,
+        notifs_enabled: safeJson('anivault_notifs_enabled', true),
+        notifs: notifStore.getAll(),
+        ep_updates: safeJson('anivault_ep_updates', {}),
+        player: safeJson('anivault_plyr', {}),
+    };
+}
+
+function applyCloudSettings(settings) {
+    if (!settings) return;
+
+    if (settings.nsfw !== undefined) {
+        state.nsfwEnabled = settings.nsfw;
+        localStorage.setItem('anivault_nsfw', JSON.stringify(settings.nsfw));
+        api.setSfwMode(!settings.nsfw);
+        const navToggle = $('#nsfwToggle');
+        if (navToggle) navToggle.checked = settings.nsfw;
+        const settingsToggle = $('#settingsNsfwToggle');
+        if (settingsToggle) settingsToggle.checked = settings.nsfw;
+        const rxOption = $('#ratingRx');
+        if (rxOption) rxOption.style.display = settings.nsfw ? '' : 'none';
+        const qTopRated = $('#quickTopRated');
+        if (qTopRated) qTopRated.style.display = settings.nsfw ? '' : 'none';
+    }
+
+    if (settings.notifs_enabled !== undefined) {
+        localStorage.setItem('anivault_notifs_enabled', JSON.stringify(settings.notifs_enabled));
+        const t = $('#settingsNotifsEnabled');
+        if (t) t.checked = settings.notifs_enabled;
+    }
+
+    if (Array.isArray(settings.notifs) && settings.notifs.length > 0) {
+        const local = notifStore.getAll();
+        const merged = new Map();
+        for (const n of [...settings.notifs, ...local]) {
+            const key = `${n.malId}-${n.type}-${n.ts}`;
+            if (!merged.has(key)) merged.set(key, n);
+        }
+        const sorted = Array.from(merged.values()).sort((a, b) => b.ts - a.ts).slice(0, 50);
+        try { localStorage.setItem('anivault_notifs', JSON.stringify(sorted)); } catch {}
+        renderNotifBell();
+    }
+
+    if (settings.ep_updates && typeof settings.ep_updates === 'object') {
+        try {
+            const local = JSON.parse(localStorage.getItem('anivault_ep_updates') || '{}');
+            const merged = { ...settings.ep_updates };
+            for (const [id, val] of Object.entries(local)) {
+                if (!merged[id] || (val.ts && val.ts > (merged[id].ts || 0))) merged[id] = val;
+            }
+            localStorage.setItem('anivault_ep_updates', JSON.stringify(merged));
+        } catch {}
+    }
+
+    if (settings.player && typeof settings.player === 'object' && Object.keys(settings.player).length > 0) {
+        try {
+            const local = JSON.parse(localStorage.getItem('anivault_plyr') || '{}');
+            if (Object.keys(local).length === 0) {
+                localStorage.setItem('anivault_plyr', JSON.stringify(settings.player));
+            }
+        } catch {}
+    }
+}
+
+// ─── Settings Page ────────────────────────────────────────────────────
+
+async function loadSettingsPage() {
+    const user = auth.getCurrentUser();
+
+    const loggedIn = $('#settingsAccountLoggedIn');
+    const loggedOut = $('#settingsAccountLoggedOut');
+    if (user) {
+        if (loggedIn) loggedIn.style.display = '';
+        if (loggedOut) loggedOut.style.display = 'none';
+        const avatar = $('#settingsAvatar');
+        if (avatar) avatar.textContent = (user.email || '?').slice(0, 2).toUpperCase();
+        const emailEl = $('#settingsEmail');
+        if (emailEl) emailEl.textContent = user.email || '';
+    } else {
+        if (loggedIn) loggedIn.style.display = 'none';
+        if (loggedOut) loggedOut.style.display = '';
+    }
+
+    const syncStatus = $('#settingsSyncStatus');
+    if (syncStatus) {
+        if (user && auth.isConfigured()) {
+            syncStatus.innerHTML = '<span class="settings-sync-status__dot settings-sync-status__dot--ok"></span> Cloud sync active';
+        } else {
+            syncStatus.innerHTML = '<span class="settings-sync-status__dot"></span> Not synced — sign in to enable';
+        }
+    }
+
+    const nsfwToggle = $('#settingsNsfwToggle');
+    if (nsfwToggle) nsfwToggle.checked = state.nsfwEnabled;
+
+    const notifsEnabled = JSON.parse(localStorage.getItem('anivault_notifs_enabled') ?? 'true');
+    const notifsToggle = $('#settingsNotifsEnabled');
+    if (notifsToggle) notifsToggle.checked = notifsEnabled;
+
+    try {
+        const player = JSON.parse(localStorage.getItem('anivault_plyr') || '{}');
+        const volSlider = $('#settingsVolume');
+        const volVal = $('#settingsVolumeVal');
+        if (volSlider && player.volume !== undefined) {
+            volSlider.value = player.volume;
+            if (volVal) volVal.textContent = `${Math.round(player.volume * 100)}%`;
+        }
+        const speedSel = $('#settingsSpeed');
+        if (speedSel && player.speed !== undefined) speedSel.value = String(player.speed);
+    } catch {}
+}
+
+function setupSettingsPage() {
+    $$('[data-settings-section]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            $$('[data-settings-section]').forEach(b => b.classList.remove('settings-nav__item--active'));
+            btn.classList.add('settings-nav__item--active');
+            const target = btn.dataset.settingsSection;
+            $$('.settings-section').forEach(s => {
+                s.classList.toggle('settings-section--hidden', s.id !== `settings-section-${target}`);
+            });
+        });
+    });
+
+    // NSFW toggle — delegates to nav toggle to run full NSFW logic
+    $('#settingsNsfwToggle')?.addEventListener('change', (e) => {
+        const navToggle = $('#nsfwToggle');
+        if (navToggle) {
+            navToggle.checked = e.target.checked;
+            navToggle.dispatchEvent(new Event('change'));
+        }
+    });
+
+    $('#settingsNotifsEnabled')?.addEventListener('change', (e) => {
+        localStorage.setItem('anivault_notifs_enabled', JSON.stringify(e.target.checked));
+        scheduleSettingsSync();
+    });
+
+    $('#settingsClearNotifs')?.addEventListener('click', () => {
+        notifStore.clear();
+        showToast('Notification history cleared', 'info');
+    });
+
+    $('#settingsVolume')?.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        const valEl = $('#settingsVolumeVal');
+        if (valEl) valEl.textContent = `${Math.round(val * 100)}%`;
+        try {
+            const p = JSON.parse(localStorage.getItem('anivault_plyr') || '{}');
+            p.volume = val;
+            localStorage.setItem('anivault_plyr', JSON.stringify(p));
+        } catch {}
+        scheduleSettingsSync();
+    });
+
+    $('#settingsSpeed')?.addEventListener('change', (e) => {
+        try {
+            const p = JSON.parse(localStorage.getItem('anivault_plyr') || '{}');
+            p.speed = parseFloat(e.target.value);
+            localStorage.setItem('anivault_plyr', JSON.stringify(p));
+        } catch {}
+        scheduleSettingsSync();
+    });
+
+    $('#settingsClearEpCache')?.addEventListener('click', () => {
+        localStorage.removeItem('anivault_ep_updates');
+        scheduleSettingsSync();
+        showToast('Episode cache cleared', 'info');
+    });
+
+    $('#settingsClearHistory')?.addEventListener('click', async () => {
+        if (!confirm('Clear all watch history? This cannot be undone.')) return;
+        await db.history.clear();
+        showToast('Watch history cleared', 'info');
+    });
+
+    $('#settingsExportData')?.addEventListener('click', async () => {
+        const [favs, hist] = await Promise.all([db.favorites.getAll(), db.history.getAll()]);
+        const blob = new Blob(
+            [JSON.stringify({ favorites: favs, history: hist, exportedAt: new Date().toISOString() }, null, 2)],
+            { type: 'application/json' }
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `anivault-export-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    $('#settingsSignOut')?.addEventListener('click', () => auth.signOut());
+    $('#settingsSignInBtn')?.addEventListener('click', openAuthModal);
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushSettingsSync();
+    });
+    window.addEventListener('beforeunload', () => flushSettingsSync());
+}
+
